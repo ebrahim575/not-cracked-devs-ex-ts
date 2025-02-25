@@ -46,186 +46,202 @@ function WalletInfo() {
 function MainApp() {
   const { authenticated, user } = usePrivy();
   const { wallets } = useWallets();
-  // Add state for kernel account address
-  const [kernelAccountAddress, setKernelAccountAddress] = useState(null);
+  
+  // State for storing wallet and session key info
+  const [walletInfo, setWalletInfo] = useState(null);
+  const [sessionKeyInfo, setSessionKeyInfo] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
 
-  async function getSmartWallet(wallets) {
-    const embeddedWallet = wallets.find(
-      (wallet) => wallet.walletClientType === "privy"
-    );
-
-    if (!embeddedWallet) {
-      console.log("No Privy embedded wallet found");
-    } else {
-      console.log('Found embedded wallet');
-    }
-
-    // const provider = await embeddedWallet.getEthereumProvider();
-    // Generate a private key
-    const privateKey = generatePrivateKey();
-
-
-    console.log("Private key generated : ",privateKey);
-    const smartAccountSigner = privateKeyToAccount(privateKey);
-    console.log('Type of smartAccountSigner:', typeof smartAccountSigner);
-    console.log('Session Signer', smartAccountSigner);
-
-    const publicClient = createPublicClient({
-      chain: mainnet, // or use a different chain like 'polygon', 'goerli', etc.
-      transport: http(), // Transport layer (using HTTP)
-    });
-
-    // Now you can use sessionSigner to sign transactions, etc.
-
-    const ecdsaValidator = await signerToEcdsaValidator(publicClient, {
-      signer: smartAccountSigner,
-      entryPoint: getEntryPoint("0.7"), // Fetching the entry point for version 0.7
-      kernelVersion: KERNEL_V3_1,       // Using Kernel version 3.1
-    });
-
-    const account = await createKernelAccount(publicClient, {
-      kernelVersion: KERNEL_V3_1, // Use Kernel version 3.1
-      plugins: {
-        sudo: ecdsaValidator, // Assuming ecdsaValidator is defined
-      },
-      entryPoint: getEntryPoint("0.7"), // Get the correct EntryPoint for version 0.7
-    });
+  // Combined function to create smart wallet and session key in one step
+  async function createWalletAndSessionKey() {
+    setIsLoading(true);
     
-    // Create Kernel Account Client with the correct entryPoint
-    const myKernelAccount = createKernelAccountClient({
-      account,
-      chain: mainnet,
-      bundlerTransport: http(process.env.NEXT_PUBLIC_ZERODEV_BUNDLER_URL),
-    });
-    console.log('My Kernel Account', myKernelAccount);
-    const accountAddress = myKernelAccount.account.address;
-    console.log('My Kernel Account Address:', accountAddress);
-    
-    // Save the kernel account address to state
-    setKernelAccountAddress(accountAddress);
-    
-    return myKernelAccount;
-  }
-
-  async function approveSessionKey({ sessionKeyAddress, wallets, strategy }) {
-    if (!sessionKeyAddress) {
-        toast.error("Session key address is required");
-        throw new Error("Session key address is required");
-    }
     try {
-        const publicClient = createPublicClient({ chain: mainnet, transport: http() });
-        const embeddedWallet = wallets.find(wallet => wallet.walletClientType === "privy");
-        if (!embeddedWallet) {
-            toast.error("No Privy embedded wallet found");
-            throw new Error("No Privy embedded wallet found");
-        }
+      // Get Privy wallet
+      const embeddedWallet = wallets.find(
+        (wallet) => wallet.walletClientType === "privy"
+      );
 
-        // const provider = await embeddedWallet.getEthereumProvider();
-        const privateKey = generatePrivateKey();
-        const smartAccountSigner = privateKeyToAccount(privateKey);
-        const ecdsaValidator = await signerToEcdsaValidator(publicClient, {
-            signer: smartAccountSigner,
-            entryPoint: getEntryPoint("0.7"),
-            kernelVersion: KERNEL_V3_1,
-        });
-
-        const emptySessionKeySigner = await toECDSASigner({ signer: sessionKeyAddress });
-        const permissionPlugin = await toPermissionValidator(publicClient, {
-            entryPoint: getEntryPoint("0.7"),
-            signer: emptySessionKeySigner,
-            policies: [],
-            kernelVersion: KERNEL_V3_1,
-        });
-
-        const sessionKeyAccount = await createKernelAccount(publicClient, {
-            entryPoint: getEntryPoint("0.7"),
-            plugins: { sudo: ecdsaValidator, regular: permissionPlugin },
-            kernelVersion: KERNEL_V3_1,
-            index: BigInt(strategy.key),
-        });
-
-        console.log('we did it : ', sessionKeyAccount);
-        return serializePermissionAccount(sessionKeyAccount);
-    } catch (error) {
-        toast.error("Failed to approve session key");
-        console.error("Error approving session key:", error);
-        throw error;
-    }
-  }
-
-  // "Get Smart Wallet" Button
-  function GetSmartWalletButton() {
-    const handleGetSmartWallet = async () => {
-      try {
-        await getSmartWallet(wallets);
-        toast.success("Smart Wallet created!");
-      } catch (error) {
-        toast.error("Error getting smart wallet");
-        console.error("Error in getSmartWallet:", error);
-      }
-    };
-
-    return (
-      <button
-        type="button"
-        onClick={handleGetSmartWallet}
-        className="text-white bg-yellow-700 hover:bg-yellow-800 focus:ring-4 focus:ring-yellow-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-yellow-600 dark:hover:bg-yellow-700 focus:outline-none dark:focus:ring-yellow-800"
-      >
-        Get Smart Wallet
-      </button>
-    );
-  }
-
-  // Approve Session Key Button
-  function ApproveSessionKeyButton() {
-    const handleApproveSessionKey = async () => {
-      if (!kernelAccountAddress) {
-        toast.error("No kernel account address available. Please create a smart wallet first.");
-        return;
+      if (!embeddedWallet) {
+        toast.error("No Privy embedded wallet found");
+        return null;
       }
       
-      try {
-        await approveSessionKey({
-          sessionKeyAddress: kernelAccountAddress, // Use the stored kernel account address
-          wallets,
-          strategy: { key: "1" },
-        });
-        toast.success("Session Key Approved!");
-      } catch (error) {
-        toast.error("Error approving session key");
-        console.error("Error:", error);
+      console.log('Found embedded wallet');
+
+      // Create public client
+      const publicClient = createPublicClient({
+        chain: mainnet,
+        transport: http(),
+      });
+
+      // ======= STEP 1: CREATE SMART WALLET =======
+      
+      // Generate a private key for the smart wallet
+      const walletPrivateKey = generatePrivateKey();
+      console.log("Smart wallet private key generated:", walletPrivateKey);
+      
+      const smartAccountSigner = privateKeyToAccount(walletPrivateKey);
+      console.log('Smart account signer:', smartAccountSigner);
+
+      // Create ECDSA validator for the smart wallet
+      const ecdsaValidator = await signerToEcdsaValidator(publicClient, {
+        signer: smartAccountSigner,
+        entryPoint: getEntryPoint("0.7"),
+        kernelVersion: KERNEL_V3_1,
+      });
+
+      // Set a specific index for the kernel account
+      const accountIndex = BigInt(1);
+
+      // Create kernel account
+      const account = await createKernelAccount(publicClient, {
+        kernelVersion: KERNEL_V3_1,
+        plugins: {
+          sudo: ecdsaValidator,
+        },
+        entryPoint: getEntryPoint("0.7"),
+        index: accountIndex,
+      });
+      
+      // Create kernel account client
+      const kernelClient = createKernelAccountClient({
+        account,
+        chain: mainnet,
+        bundlerTransport: http(process.env.NEXT_PUBLIC_ZERODEV_BUNDLER_URL),
+      });
+      
+      console.log('Smart Wallet Account:', kernelClient);
+      const smartWalletAddress = kernelClient.account.address;
+      console.log('Smart Wallet Address:', smartWalletAddress);
+      
+      // Save smart wallet info to state
+      const smartWalletInfo = {
+        address: smartWalletAddress,
+        privateKey: walletPrivateKey,
+        index: accountIndex.toString()
+      };
+      
+      setWalletInfo(smartWalletInfo);
+      toast.success("Smart Wallet created!");
+
+      // ======= STEP 2: CREATE SESSION KEY =======
+      
+      // Generate a new session key
+      const sessionKeyPrivateKey = generatePrivateKey();
+      const sessionKeySigner = privateKeyToAccount(sessionKeyPrivateKey);
+      console.log("Session key address:", sessionKeySigner.address);
+
+      // Create the session key validator
+      const sessionKeyValidator = await toECDSASigner({ signer: sessionKeySigner });
+      
+      // Create permission plugin for the session key
+      const permissionPlugin = await toPermissionValidator(publicClient, {
+        entryPoint: getEntryPoint("0.7"),
+        signer: sessionKeyValidator,
+        policies: [], // Empty means all permissions allowed
+        kernelVersion: KERNEL_V3_1,
+      });
+
+      // Create the session key account with the SAME INDEX as the smart wallet
+      const sessionKeyAccount = await createKernelAccount(publicClient, {
+        entryPoint: getEntryPoint("0.7"),
+        plugins: { 
+          sudo: ecdsaValidator,     // Main key has full access
+          regular: permissionPlugin // Session key has limited access
+        },
+        kernelVersion: KERNEL_V3_1,
+        index: accountIndex, // Using the same index to link to the same wallet
+      });
+
+      console.log('Session key account created:', sessionKeyAccount);
+      
+      // Verify the addresses match (with proper null checking)
+      if (sessionKeyAccount.address && smartWalletAddress) {
+        if (sessionKeyAccount.address.toLowerCase() !== smartWalletAddress.toLowerCase()) {
+          console.warn("Warning: Session key account address doesn't match smart wallet address!");
+          console.log("Session key account address:", sessionKeyAccount.address);
+          console.log("Smart wallet address:", smartWalletAddress);
+        } else {
+          console.log("Success: Session key is properly linked to the smart wallet!");
+        }
       }
+      
+      // Create a serialized account
+      const serialized = serializePermissionAccount(sessionKeyAccount);
+      
+      // Save session key info to state
+      const sessionInfo = {
+        address: sessionKeySigner.address,
+        privateKey: sessionKeyPrivateKey,
+        accountAddress: sessionKeyAccount.address
+      };
+      
+      setSessionKeyInfo(sessionInfo);
+      toast.success("Session Key created and linked to smart wallet!");
+      
+      return {
+        smartWallet: smartWalletInfo,
+        sessionKey: sessionInfo
+      };
+    } catch (error) {
+      toast.error("Error creating wallet and session key");
+      console.error("Error:", error);
+      return null;
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  // Combined button for creating wallet and session key
+  function CreateWalletAndSessionKeyButton() {
+    const handleClick = async () => {
+      await createWalletAndSessionKey();
     };
 
     return (
       <button
         type="button"
-        onClick={handleApproveSessionKey}
-        className="text-white bg-green-700 hover:bg-green-800 focus:ring-4 focus:ring-green-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-green-600 dark:hover:bg-green-700 focus:outline-none dark:focus:ring-green-800"
-        disabled={!kernelAccountAddress}
+        onClick={handleClick}
+        disabled={isLoading}
+        className="text-white bg-purple-700 hover:bg-purple-800 focus:ring-4 focus:ring-purple-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-purple-600 dark:hover:bg-purple-700 focus:outline-none dark:focus:ring-purple-800"
       >
-        Approve Session Key
+        {isLoading ? "Creating..." : "Create Wallet & Session Key"}
       </button>
     );
   }
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center p-24">
-      <div className="flex flex-col items-center justify-center gap-6">
+      <div className="flex flex-col items-center justify-center gap-6 w-full max-w-3xl">
         <h1 className="text-4xl font-bold">Privy Login Demo</h1>
         <LoginButton />
         {authenticated && (
           <>
             <WalletInfo />
-            <GetSmartWalletButton />
-            {kernelAccountAddress && (
+            <CreateWalletAndSessionKeyButton />
+            
+            {walletInfo && (
               <div className="mt-4 p-4 border rounded-lg bg-gray-50 w-full break-words">
-                <h2 className="text-xl font-semibold mb-2">Kernel Account</h2>
-                <p>Address: {kernelAccountAddress}</p>
+                <h2 className="text-xl font-semibold mb-2">Smart Wallet</h2>
+                <p>Address: {walletInfo.address}</p>
+                <p>Index: {walletInfo.index}</p>
+                <p className="mt-2 text-sm text-gray-500">Private key (for demo purposes only):</p>
+                <p className="font-mono text-xs">{walletInfo.privateKey}</p>
               </div>
             )}
-            <ApproveSessionKeyButton />
-            <div className="mt-4 p-4 border rounded-lg bg-gray-50">
+            
+            {sessionKeyInfo && (
+              <div className="mt-4 p-4 border rounded-lg bg-gray-50 w-full break-words">
+                <h2 className="text-xl font-semibold mb-2">Session Key</h2>
+                <p>Session Key Address: {sessionKeyInfo.address}</p>
+                <p>Linked to Wallet: {sessionKeyInfo.accountAddress}</p>
+                <p className="mt-2 text-sm text-gray-500">Session private key (for demo purposes only):</p>
+                <p className="font-mono text-xs">{sessionKeyInfo.privateKey}</p>
+              </div>
+            )}
+            
+            <div className="mt-4 p-4 border rounded-lg bg-gray-50 w-full">
               <h2 className="text-xl font-semibold mb-2">Connected User</h2>
               <p>User ID: {user?.id}</p>
               <p>Email: {user?.email?.address || "Not provided"}</p>
