@@ -4,7 +4,7 @@ import Head from "next/head";
 import toast from "react-hot-toast";
 import { privateKeyToAccount } from "viem/accounts";
 import { createPublicClient } from 'viem';
-import { mainnet } from 'viem/chains'; // Ethereum mainnet, or any other chain you prefer
+import { base } from 'viem/chains'; // Import BASE network instead of mainnet
 import { http } from 'viem';
 import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator"
 import { getEntryPoint, KERNEL_V3_1 } from "@zerodev/sdk/constants";
@@ -69,9 +69,9 @@ function MainApp() {
       
       console.log('Found embedded wallet');
 
-      // Create public client
+      // Create public client using BASE network
       const publicClient = createPublicClient({
-        chain: mainnet,
+        chain: base, // Use BASE network instead of mainnet
         transport: http(),
       });
 
@@ -104,10 +104,10 @@ function MainApp() {
         index: accountIndex,
       });
       
-      // Create kernel account client
+      // Create kernel account client with BASE network
       const kernelClient = createKernelAccountClient({
         account,
-        chain: mainnet,
+        chain: base, // Use BASE network instead of mainnet
         bundlerTransport: http(process.env.NEXT_PUBLIC_ZERODEV_BUNDLER_URL),
       });
       
@@ -119,11 +119,12 @@ function MainApp() {
       const smartWalletInfo = {
         address: smartWalletAddress,
         privateKey: walletPrivateKey,
-        index: accountIndex.toString()
+        index: accountIndex.toString(),
+        network: "BASE"
       };
       
       setWalletInfo(smartWalletInfo);
-      toast.success("Smart Wallet created!");
+      toast.success("Smart Wallet created on BASE network!");
 
       // ======= STEP 2: CREATE SESSION KEY =======
       
@@ -174,11 +175,12 @@ function MainApp() {
       const sessionInfo = {
         address: sessionKeySigner.address,
         privateKey: sessionKeyPrivateKey,
-        accountAddress: sessionKeyAccount.address
+        accountAddress: sessionKeyAccount.address,
+        network: "BASE"
       };
       
       setSessionKeyInfo(sessionInfo);
-      toast.success("Session Key created and linked to smart wallet!");
+      toast.success("Session Key created and linked to smart wallet on BASE!");
       
       return {
         smartWallet: smartWalletInfo,
@@ -206,7 +208,7 @@ function MainApp() {
         disabled={isLoading}
         className="text-white bg-purple-700 hover:bg-purple-800 focus:ring-4 focus:ring-purple-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-purple-600 dark:hover:bg-purple-700 focus:outline-none dark:focus:ring-purple-800"
       >
-        {isLoading ? "Creating..." : "Create Wallet & Session Key"}
+        {isLoading ? "Creating..." : "Create Wallet & Session Key on BASE"}
       </button>
     );
   }
@@ -223,9 +225,10 @@ function MainApp() {
             
             {walletInfo && (
               <div className="mt-4 p-4 border rounded-lg bg-gray-50 w-full break-words">
-                <h2 className="text-xl font-semibold mb-2">Smart Wallet</h2>
+                <h2 className="text-xl font-semibold mb-2">Smart Wallet (BASE Network)</h2>
                 <p>Address: {walletInfo.address}</p>
                 <p>Index: {walletInfo.index}</p>
+                <p>Network: {walletInfo.network}</p>
                 <p className="mt-2 text-sm text-gray-500">Private key (for demo purposes only):</p>
                 <p className="font-mono text-xs">{walletInfo.privateKey}</p>
               </div>
@@ -233,9 +236,10 @@ function MainApp() {
             
             {sessionKeyInfo && (
               <div className="mt-4 p-4 border rounded-lg bg-gray-50 w-full break-words">
-                <h2 className="text-xl font-semibold mb-2">Session Key</h2>
+                <h2 className="text-xl font-semibold mb-2">Session Key (BASE Network)</h2>
                 <p>Session Key Address: {sessionKeyInfo.address}</p>
                 <p>Linked to Wallet: {sessionKeyInfo.accountAddress}</p>
+                <p>Network: {sessionKeyInfo.network}</p>
                 <p className="mt-2 text-sm text-gray-500">Session private key (for demo purposes only):</p>
                 <p className="font-mono text-xs">{sessionKeyInfo.privateKey}</p>
               </div>
