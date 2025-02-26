@@ -17,7 +17,7 @@ import axios from 'axios';
 
 // Load configuration from environment variables
 const BASE_CONFIG = {
-  projectId: process.env.NEXT_PUBLIC_ZERODEV_PROJECT_ID || '',
+  projectId: process.env.NEXT_PUBLIC_PRIVY_APP_ID || '',
   chain: base,
   chainId: 8453,
   bundlerRpc: process.env.NEXT_PUBLIC_ZERODEV_BUNDLER_URL || '',

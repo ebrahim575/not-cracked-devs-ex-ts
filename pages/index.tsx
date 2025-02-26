@@ -18,7 +18,7 @@ import axios from 'axios';
 
 // Configuration for BASE network
 const BASE_CONFIG = {
-  projectId: process.env.NEXT_PUBLIC_ZERODEV_PROJECT_ID || '',
+  projectId: process.env.NEXT_PUBLIC_PRIVY_APP_ID || '',
   chain: base,
   chainId: 8453,
   bundlerRpc: process.env.NEXT_PUBLIC_ZERODEV_BUNDLER_URL || '',
@@ -231,8 +231,8 @@ function MainApp() {
   // Target address for sending funds
   const TARGET_ADDRESS = "0x8D33614Cbc97B59F8408aD67E520549F57F80055";
   // Amount for USDC (0.01 USDC = 10000 units with 6 decimals)
-  const AMOUNT_USDC = BigInt(880000); // 0.01 USDC
-
+  const AMOUNT_USDC = BigInt(10000); // 0.01 USDC
+  
   // Function to load the existing wallet and session key from storage
   useEffect(() => {
     async function loadExistingWallet() {
@@ -447,7 +447,7 @@ function MainApp() {
       const paymasterClient = createZeroDevPaymasterClient({
         chain: base,
         // Get this RPC from ZeroDev dashboard
-        transport: http(BASE_CONFIG.paymasterRpc),
+        transport: http(BASE_CONFIG.zerodev_paymaster_url),
       });
       
       // Create kernel account client with BASE network and paymaster
