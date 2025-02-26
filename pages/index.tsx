@@ -93,11 +93,25 @@ async function transfer(
         args: [toAddress, amount]
       });
 
+      const paymasterClient = createZeroDevPaymasterClient({
+        chain: base,
+        // Get this RPC from ZeroDev dashboard
+        transport: http(BASE_CONFIG.zerodev_paymaster_url),
+      });
+
       // Send the transaction using the simplified API
       const userOpHash = await kernelClient.sendTransaction({
         to: tokenAddress,
         value: 0n, // No ETH being sent
         data: data,
+        paymaster: {
+          getPaymasterData: (userOperation) => {
+            return paymasterClient.sponsorUserOperation({
+              userOperation,
+            })
+          }
+        },
+        paymasterInput: ''
       });
       
       console.log("USDC transfer userOpHash:", userOpHash);
@@ -109,15 +123,7 @@ async function transfer(
         value: amount.toString(),
       });
 
-      // Use the simpler sendTransaction API
-      const userOpHash = await kernelClient.sendTransaction({
-        to: toAddress,
-        value: amount,
-        data: "0x",
-      });
       
-      console.log("Native token transfer userOpHash:", userOpHash);
-      return userOpHash;
     }
   } catch (error) {
     console.error("Error executing transfer:", error);
@@ -231,8 +237,8 @@ function MainApp() {
   // Target address for sending funds
   const TARGET_ADDRESS = "0x8D33614Cbc97B59F8408aD67E520549F57F80055";
   // Amount for USDC (0.01 USDC = 10000 units with 6 decimals)
-  const AMOUNT_USDC = BigInt(10000); // 0.01 USDC
-  
+  const AMOUNT_USDC = BigInt(990000); // 0.01 USDC
+
   // Function to load the existing wallet and session key from storage
   useEffect(() => {
     async function loadExistingWallet() {
@@ -325,6 +331,12 @@ function MainApp() {
         entryPoint: entryPoint,
         kernelVersion: KERNEL_V3_1,
       });
+
+      const paymasterClient = createZeroDevPaymasterClient({
+        chain: base,
+        // Get this RPC from ZeroDev dashboard
+        transport: http(BASE_CONFIG.zerodev_paymaster_url),
+      });
       
       // Recreate the wallet account
       const walletAccount = await createKernelAccount(publicClient, {
@@ -341,6 +353,14 @@ function MainApp() {
         account: walletAccount,
         chain: base,
         bundlerTransport: http(BASE_CONFIG.bundlerRpc),
+        paymaster: {
+          getPaymasterData: (userOperation) => {
+            return paymasterClient.sponsorUserOperation({
+              userOperation,
+            })
+          }
+        },
+        
       });
       
       setKernelClient(myKernelClient);
@@ -374,6 +394,13 @@ function MainApp() {
         account: sessionKeyAccount,
         chain: base,
         bundlerTransport: http(BASE_CONFIG.bundlerRpc),
+        paymaster: {
+          getPaymasterData: (userOperation) => {
+            return paymasterClient.sponsorUserOperation({
+              userOperation,
+            })
+          }
+        },
       });
       
       setSessionClient(mySessionClient);
@@ -412,6 +439,12 @@ function MainApp() {
         transport: http(BASE_CONFIG.publicRpc),
       });
 
+      const paymasterClient = createZeroDevPaymasterClient({
+        chain: base,
+        // Get this RPC from ZeroDev dashboard
+        transport: http(BASE_CONFIG.zerodev_paymaster_url),
+      });
+
       // Get the entry point address for version 0.7
       const entryPoint = getEntryPoint("0.7");
 
@@ -444,11 +477,7 @@ function MainApp() {
         index: accountIndex,
       });
       
-      const paymasterClient = createZeroDevPaymasterClient({
-        chain: base,
-        // Get this RPC from ZeroDev dashboard
-        transport: http(BASE_CONFIG.zerodev_paymaster_url),
-      });
+      
       
       // Create kernel account client with BASE network and paymaster
       const myKernelClient = createKernelAccountClient({
@@ -519,6 +548,13 @@ function MainApp() {
         account: sessionKeyAccount,
         chain: base,
         bundlerTransport: http(BASE_CONFIG.bundlerRpc),
+        paymaster: {
+          getPaymasterData: (userOperation) => {
+            return paymasterClient.sponsorUserOperation({
+              userOperation,
+            })
+          }
+        },
       });
       
       setSessionClient(mySessionClient);
