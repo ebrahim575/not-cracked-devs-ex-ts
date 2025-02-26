@@ -1,0 +1,16 @@
+{
+  "did:privy:cm7ju9bl200jmh0z358hoburt": {
+    "walletInfo": {
+      "address": "0xd1f96c610cE86C3cE50f12aab44CCD43C15677dA",
+      "privateKey": "0xf2b5d9b1f1917ed5ca7fbe94271c5bd6a07a35916dffa620a59198dd6f6c8ee9",
+      "index": "1",
+      "network": "BASE"
+    },
+    "sessionKeyInfo": {
+      "address": "0x65eAD09c48a001CFD3259f3dC553C3B87b61EB8d",
+      "privateKey": "0x7396be57f69c2c2ca7ace3924ec2aa70ff1047ffe34475a0d7c357ecb7846ebb",
+      "accountAddress": "0xd1f96c610cE86C3cE50f12aab44CCD43C15677dA",
+      "network": "BASE"
+    }
+  }
+}
