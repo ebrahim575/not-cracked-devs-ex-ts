@@ -3,31 +3,27 @@ import { PrivyProvider, usePrivy, useWallets, useFundWallet } from "@privy-io/re
 import Head from "next/head";
 import toast from "react-hot-toast";
 import { privateKeyToAccount } from "viem/accounts";
-import { createPublicClient, parseEther, encodeFunctionData } from 'viem';
+import { createPublicClient } from 'viem';
 import { base } from 'viem/chains';
 import { http } from 'viem';
 import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator"
 import { getEntryPoint, KERNEL_V3_1 } from "@zerodev/sdk/constants";
 import { createKernelAccount, createKernelAccountClient, createZeroDevPaymasterClient } from "@zerodev/sdk";
 import { generatePrivateKey } from "viem/accounts";
-import { serializePermissionAccount, toPermissionValidator } from "@zerodev/permissions";
+import { toPermissionValidator } from "@zerodev/permissions";
 import { toECDSASigner } from "@zerodev/permissions/signers";
 import { toSudoPolicy } from "@zerodev/permissions/policies";
-import { KernelAccountClient } from '@zerodev/sdk';
 import axios from 'axios';
 
-// Configuration for BASE network using environment variables
+// Load configuration from environment variables
 const BASE_CONFIG = {
   projectId: process.env.NEXT_PUBLIC_ZERODEV_PROJECT_ID || '',
   chain: base,
   chainId: 8453,
   bundlerRpc: process.env.NEXT_PUBLIC_ZERODEV_BUNDLER_URL || '',
+  publicRpc: "https://mainnet.base.org",
   zerodev_paymaster_url: process.env.NEXT_PUBLIC_ZERODEV_PAYMASTER_URL || '',
-  publicRpc: "https://mainnet.base.org"
 };
-
-// USDC token address on BASE
-const USDC_TOKEN_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
 // API endpoints for wallet storage
 const API_ENDPOINTS = {
@@ -51,26 +47,11 @@ interface SessionKeyInfo {
   network: string;
 }
 
-// ERC-20 transfer ABI
-const erc20TransferAbi = [
-  {
-    "inputs": [
-      {"name": "to", "type": "address"},
-      {"name": "value", "type": "uint256"}
-    ],
-    "name": "transfer",
-    "outputs": [{"name": "", "type": "bool"}],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  }
-];
-
-// Updated transfer function to handle both ETH and USDC transfers
-async function transfer(
+// Function to handle ETH transfers
+async function transferETH(
   kernelClient: any,
   toAddress: string,
-  amount: bigint,
-  tokenAddress?: string // Optional parameter for token address
+  amount: bigint
 ) {
   try {
     // Ensure toAddress is a valid hex string
@@ -78,87 +59,24 @@ async function transfer(
       throw new Error('Invalid address format');
     }
 
-    if (tokenAddress) {
-      // ERC-20 token transfer (USDC)
-      console.log("USDC Transfer parameters:", {
-        to: tokenAddress,
-        tokenAmount: amount.toString(),
-        recipient: toAddress
-      });
+    // Native token (ETH) transfer
+    console.log("ETH Transfer parameters:", {
+      to: toAddress,
+      value: amount.toString(),
+    });
 
-      // Encode the transfer function call
-      const data = encodeFunctionData({
-        abi: erc20TransferAbi,
-        functionName: 'transfer',
-        args: [toAddress, amount]
-      });
-
-      // Send the transaction using the simplified API
-      const userOpHash = await kernelClient.sendTransaction({
-        to: tokenAddress,
-        value: 0n, // No ETH being sent
-        data: data,
-      });
-      
-      console.log("USDC transfer userOpHash:", userOpHash);
-      return userOpHash;
-    } else {
-      // Native token (ETH) transfer
-      console.log("ETH Transfer parameters:", {
-        to: toAddress,
-        value: amount.toString(),
-      });
-
-      // Use the simpler sendTransaction API
-      const userOpHash = await kernelClient.sendTransaction({
-        to: toAddress,
-        value: amount,
-        data: "0x",
-      });
-      
-      console.log("Native token transfer userOpHash:", userOpHash);
-      return userOpHash;
-    }
+    // Send the transaction
+    const userOpHash = await kernelClient.sendTransaction({
+      to: toAddress,
+      value: amount,
+      data: "0x",
+    });
+    
+    console.log("ETH transfer userOpHash:", userOpHash);
+    return userOpHash;
   } catch (error) {
-    console.error("Error executing transfer:", error);
+    console.error("Error executing ETH transfer:", error);
     throw error;
-  }
-}
-
-// Function to check USDC balance
-async function checkUSDCBalance(address: string) {
-  try {
-    const publicClient = createPublicClient({
-      chain: base,
-      transport: http(BASE_CONFIG.publicRpc),
-    });
-
-    // ERC-20 balanceOf ABI
-    const erc20BalanceOfAbi = [
-      {
-        "inputs": [
-          {"name": "account", "type": "address"}
-        ],
-        "name": "balanceOf",
-        "outputs": [{"name": "", "type": "uint256"}],
-        "stateMutability": "view",
-        "type": "function"
-      }
-    ];
-
-    // Call the balanceOf function
-    const balance = await publicClient.readContract({
-      address: USDC_TOKEN_ADDRESS,
-      abi: erc20BalanceOfAbi,
-      functionName: 'balanceOf',
-      args: [address],
-    });
-
-    console.log(`USDC Balance for ${address}: ${balance}`);
-    return balance;
-  } catch (error) {
-    console.error("Error checking USDC balance:", error);
-    return 0n;
   }
 }
 
@@ -224,14 +142,13 @@ function MainApp() {
   const [transferHash, setTransferHash] = useState(null);
   const [transferLoading, setTransferLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
-  const [usdcBalance, setUsdcBalance] = useState<bigint | null>(null);
   const [ethBalance, setEthBalance] = useState<bigint | null>(null);
   const [checkingBalance, setCheckingBalance] = useState(false);
 
   // Target address for sending funds
   const TARGET_ADDRESS = "0x8D33614Cbc97B59F8408aD67E520549F57F80055";
-  // Amount for USDC (0.01 USDC = 10000 units with 6 decimals)
-  const AMOUNT_USDC = BigInt(880000); // 0.01 USDC
+  // Amount for ETH transfer (0.001 ETH)
+  const AMOUNT_ETH = BigInt(1000000000000000); // 0.001 ETH (in wei)
 
   // Function to load the existing wallet and session key from storage
   useEffect(() => {
@@ -269,23 +186,19 @@ function MainApp() {
     loadExistingWallet();
   }, [authenticated, wallets, user?.id]);
 
-  // Effect to check balances when wallet is initialized
+  // Effect to check balance when wallet is initialized
   useEffect(() => {
     if (walletInfo?.address) {
-      checkBalances();
+      checkEthBalance();
     }
   }, [walletInfo?.address]);
 
-  // Function to check both ETH and USDC balances
-  async function checkBalances() {
+  // Function to check ETH balance
+  async function checkEthBalance() {
     if (!walletInfo?.address) return;
 
     setCheckingBalance(true);
     try {
-      // Check USDC balance
-      const usdc = await checkUSDCBalance(walletInfo.address);
-      setUsdcBalance(usdc);
-
       // Check ETH balance
       const publicClient = createPublicClient({
         chain: base,
@@ -298,7 +211,7 @@ function MainApp() {
       
       setEthBalance(eth);
     } catch (error) {
-      console.error("Error checking balances:", error);
+      console.error("Error checking ETH balance:", error);
     } finally {
       setCheckingBalance(false);
     }
@@ -383,9 +296,6 @@ function MainApp() {
     } catch (error) {
       console.error("Error initializing from saved data:", error);
       toast.error("Failed to initialize the saved wallet");
-      // Clear the stored data if we can't initialize from it
-      localStorage.removeItem('walletInfo');
-      localStorage.removeItem('sessionInfo');
     }
   }
 
@@ -562,8 +472,8 @@ function MainApp() {
       
       toast.success("Session Key created and linked to smart wallet on BASE!");
       
-      // Check balances after wallet creation
-      setTimeout(() => checkBalances(), 2000);
+      // Check balance after wallet creation
+      setTimeout(() => checkEthBalance(), 2000);
       
       return {
         smartWallet: smartWalletInfo,
@@ -594,42 +504,40 @@ function MainApp() {
     setKernelClient(null);
     setSessionClient(null);
     setTransferHash(null);
-    setUsdcBalance(null);
     setEthBalance(null);
     toast.success("Wallet data cleared. You can now create a new wallet.");
   }
 
-  // Function to send USDC
-  async function sendUSDC() {
+  // Function to send ETH
+  async function sendETH() {
     if (!sessionClient) {
       toast.error("No session client available. Please create a wallet first.");
       return;
     }
 
-    if (!usdcBalance || usdcBalance < AMOUNT_USDC) {
-      toast.error("Insufficient USDC balance. Please fund your wallet first.");
+    if (!ethBalance || ethBalance < AMOUNT_ETH) {
+      toast.error("Insufficient ETH balance. Please fund your wallet first.");
       return;
     }
 
     setTransferLoading(true);
     try {
-      const txHash = await transfer(
+      const txHash = await transferETH(
         sessionClient,
         TARGET_ADDRESS,
-        AMOUNT_USDC,
-        USDC_TOKEN_ADDRESS // Pass the USDC token address
+        AMOUNT_ETH
       );
       
       setTransferHash(txHash);
-      toast.success("Successfully sent 0.01 USDC!");
+      toast.success("Successfully sent 0.001 ETH!");
       
-      // Update balances after transfer
-      setTimeout(() => checkBalances(), 5000);
+      // Update balance after transfer
+      setTimeout(() => checkEthBalance(), 5000);
       
       return txHash;
     } catch (error) {
-      toast.error("Error sending USDC");
-      console.error("Error sending USDC:", error);
+      toast.error("Error sending ETH");
+      console.error("Error sending ETH:", error);
     } finally {
       setTransferLoading(false);
     }
@@ -647,8 +555,8 @@ function MainApp() {
       await fundWallet(walletInfo.address);
       toast.success("Funding process initiated!");
       
-      // Schedule a check for updated balances
-      setTimeout(() => checkBalances(), 10000);
+      // Schedule a check for updated balance
+      setTimeout(() => checkEthBalance(), 10000);
     } catch (error) {
       console.error("Error funding wallet:", error);
       toast.error("Failed to fund wallet");
@@ -669,12 +577,6 @@ function MainApp() {
     }
   };
 
-  // Format USDC balance for display (6 decimals)
-  const formatUsdcBalance = (balance: bigint | null) => {
-    if (balance === null) return "Loading...";
-    return (Number(balance) / 1_000_000).toFixed(6);
-  };
-
   // Format ETH balance for display (18 decimals)
   const formatEthBalance = (balance: bigint | null) => {
     if (balance === null) return "Loading...";
@@ -684,7 +586,7 @@ function MainApp() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center p-8">
       <div className="flex flex-col items-center justify-center gap-6 w-full max-w-2xl">
-        <h1 className="text-4xl font-bold mb-4">USDC on BASE Demo</h1>
+        <h1 className="text-4xl font-bold mb-4">Privy Login Demo</h1>
         
         {/* Login/Logout Section */}
         <div className="w-full flex gap-4 justify-center">
@@ -738,11 +640,11 @@ function MainApp() {
               
               {sessionClient && (
                 <Button 
-                  onClick={sendUSDC}
-                  disabled={transferLoading || !sessionClient || !usdcBalance || usdcBalance < AMOUNT_USDC}
+                  onClick={sendETH}
+                  disabled={transferLoading || !sessionClient || !ethBalance || ethBalance < AMOUNT_ETH}
                   color="green"
                 >
-                  {transferLoading ? "Sending..." : "Send 0.01 USDC"}
+                  {transferLoading ? "Sending..." : "Send 0.001 ETH"}
                 </Button>
               )}
               
@@ -758,11 +660,11 @@ function MainApp() {
               
               {walletInfo && (
                 <Button 
-                  onClick={checkBalances}
+                  onClick={checkEthBalance}
                   disabled={checkingBalance}
                   color="gray"
                 >
-                  {checkingBalance ? "Checking..." : "Refresh Balances"}
+                  {checkingBalance ? "Checking..." : "Refresh Balance"}
                 </Button>
               )}
             </div>
@@ -774,6 +676,73 @@ function MainApp() {
                   <div className="grid grid-cols-1 gap-2">
                     <div>
                       <span className="font-semibold">Address:</span> {walletInfo.address}
+                    </div>
+                    <div>
+                      <span className="font-semibold">ETH Balance:</span> {formatEthBalance(ethBalance)} ETH
+                    </div>
+                    <div>
+                      <span className="font-semibold">Index:</span> {walletInfo.index}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Network:</span> {walletInfo.network}
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500 mt-2">Private key (demo only):</p>
+                      <p className="font-mono text-xs overflow-x-auto bg-gray-100 p-2 rounded">{walletInfo.privateKey}</p>
+                    </div>
+                  </div>
+                </InfoCard>
+              )}
+              
+              {sessionKeyInfo && (
+                <InfoCard title="Session Key (BASE Network)">
+                  <div className="grid grid-cols-1 gap-2">
+                    <div>
+                      <span className="font-semibold">Session Key Address:</span> {sessionKeyInfo.address}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Linked to Wallet:</span> {sessionKeyInfo.accountAddress}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Network:</span> {sessionKeyInfo.network}
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500 mt-2">Session private key (demo only):</p>
+                      <p className="font-mono text-xs overflow-x-auto bg-gray-100 p-2 rounded">{sessionKeyInfo.privateKey}</p>
+                    </div>
+                  </div>
+                </InfoCard>
+              )}
+              
+              {/* Transfer Information */}
+              {sessionClient && (
+                <InfoCard title="Transfer ETH" color="indigo">
+                  <p className="mb-4">Send 0.001 ETH to: 
+                    <span className="font-mono text-sm ml-2 bg-indigo-100 p-1 rounded">{TARGET_ADDRESS}</span>
+                  </p>
+                  
+                  {ethBalance && ethBalance < AMOUNT_ETH && (
+                    <div className="mb-4 p-3 border rounded-lg bg-yellow-50">
+                      <p className="text-yellow-800">
+                        <span className="font-semibold">Warning:</span> Insufficient ETH balance. 
+                        Please fund your wallet first.
+                      </p>
+                    </div>
+                  )}
+                  
+                  {transferHash && (
+                    <div className="mt-4 p-3 border rounded-lg bg-green-50">
+                      <h3 className="text-lg font-semibold mb-2">Transaction Sent!</h3>
+                      <p className="mb-2">User Operation Hash:</p>
+                      <p className="font-mono text-xs bg-white p-2 rounded overflow-x-auto">{transferHash}</p>
+                      <a 
+                        href={`https://basescan.org/tx/${transferHash}`} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline mt-3 inline-block"
+                      >
+                        View on BaseScan
+                      </a>
                     </div>
                   )}
                 </InfoCard>
@@ -813,8 +782,8 @@ export default function Home() {
   return (
     <>
       <Head>
-        <title>USDC on BASE Transfer Demo</title>
-        <meta name="description" content="A proof of concept for USDC transfers on BASE using Privy authentication" />
+        <title>ETH on BASE Transfer Demo</title>
+        <meta name="description" content="A proof of concept for Privy authentication and ETH transfers on BASE" />
       </Head>
       
       <PrivyProvider 
@@ -835,73 +804,4 @@ export default function Home() {
       </PrivyProvider>
     </>
   );
-                    <div>
-                      <span className="font-semibold">ETH Balance:</span> {formatEthBalance(ethBalance)} ETH
-                    </div>
-                    <div>
-                      <span className="font-semibold">USDC Balance:</span> {formatUsdcBalance(usdcBalance)} USDC
-                    </div>
-                    <div>
-                      <span className="font-semibold">Index:</span> {walletInfo.index}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Network:</span> {walletInfo.network}
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500 mt-2">Private key (demo only):</p>
-                      <p className="font-mono text-xs overflow-x-auto bg-gray-100 p-2 rounded">{walletInfo.privateKey}</p>
-                    </div>
-                  </div>
-                </InfoCard>
-              )}
-              
-              {sessionKeyInfo && (
-                <InfoCard title="Session Key (BASE Network)">
-                  <div className="grid grid-cols-1 gap-2">
-                    <div>
-                      <span className="font-semibold">Session Key Address:</span> {sessionKeyInfo.address}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Linked to Wallet:</span> {sessionKeyInfo.accountAddress}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Network:</span> {sessionKeyInfo.network}
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500 mt-2">Session private key (demo only):</p>
-                      <p className="font-mono text-xs overflow-x-auto bg-gray-100 p-2 rounded">{sessionKeyInfo.privateKey}</p>
-                    </div>
-                  </div>
-                </InfoCard>
-              )}
-              
-              {/* Transfer Information */}
-              {sessionClient && (
-                <InfoCard title="Transfer USDC" color="indigo">
-                  <p className="mb-4">Send 0.01 USDC to: 
-                    <span className="font-mono text-sm ml-2 bg-indigo-100 p-1 rounded">{TARGET_ADDRESS}</span>
-                  </p>
-                  
-                  {usdcBalance && usdcBalance < AMOUNT_USDC && (
-                    <div className="mb-4 p-3 border rounded-lg bg-yellow-50">
-                      <p className="text-yellow-800">
-                        <span className="font-semibold">Warning:</span> Insufficient USDC balance. 
-                        Please fund your wallet with USDC first.
-                      </p>
-                    </div>
-                  )}
-                  
-                  {transferHash && (
-                    <div className="mt-4 p-3 border rounded-lg bg-green-50">
-                      <h3 className="text-lg font-semibold mb-2">Transaction Sent!</h3>
-                      <p className="mb-2">User Operation Hash:</p>
-                      <p className="font-mono text-xs bg-white p-2 rounded overflow-x-auto">{transferHash}</p>
-                      <a 
-                        href={`https://basescan.org/tx/${transferHash}`} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-blue-600 hover:underline mt-3 inline-block"
-                      >
-                        View on BaseScan
-                      </a>
-                    </div>
+}
