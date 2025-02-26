@@ -1,40 +1,112 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/pages/api-reference/create-next-app).
+# Smart Wallet with Session Keys: Application Summary
 
-## Getting Started
+## Overview
+We've built a web application that demonstrates account abstraction using ZeroDev's SDK, combined with Privy for authentication. The application allows users to create a smart wallet on the BASE network, generate session keys to control that wallet, manage funds, and execute transactions.
 
-First, run the development server:
+## Core Components
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+### Authentication and Identity
+- **Privy Integration**: Handles user authentication with email or social login
+- **Wallet Management**: Creates and manages the user's smart wallet and session keys
+- **Local Storage**: Stores wallet and session key information in the browser's `localStorage` for persistence
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Smart Wallet Implementation
+- **Kernel Account**: Creates a smart contract wallet using ZeroDev's Kernel v3.1
+- **Session Keys**: Implements session keys with full permissions using sudo policies
+- **Transaction Execution**: Enables sending both native ETH and ERC-20 tokens (USDC)
 
-You can start editing the page by modifying `pages/index.tsx`. The page auto-updates as you edit the file.
+### User Interface
+- **Wallet Creation Flow**: Guides users through creating a smart wallet and session key
+- **Balance Display**: Shows ETH and USDC balances for the wallet
+- **Transaction Interface**: Allows sending USDC to a target address
+- **Funding Interface**: Integrates with Privy's funding methods for adding funds to the wallet
 
-[API routes](https://nextjs.org/docs/pages/building-your-application/routing/api-routes) can be accessed on [http://localhost:3000/api/hello](http://localhost:3000/api/hello). This endpoint can be edited in `pages/api/hello.ts`.
+## Key Functions
 
-The `pages/api` directory is mapped to `/api/*`. Files in this directory are treated as [API routes](https://nextjs.org/docs/pages/building-your-application/routing/api-routes) instead of React pages.
+### `createWalletAndSessionKey()`
+Creates both a smart wallet and session key in one step. It:
+- Generates a private key for the smart wallet
+- Creates an ECDSA validator using this key
+- Creates a kernel account (smart wallet) with this validator
+- Generates a separate private key for the session key
+- Creates a permission validator with sudo policies
+- Links the session key to the same smart wallet through the same index
 
-This project uses [`next/font`](https://nextjs.org/docs/pages/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### `initializeFromSavedData()`
+Reconstructs the smart wallet and session key clients from saved private keys, allowing the wallet to be reused across sessions.
 
-## Learn More
+### `transfer()`
+Handles both ETH and USDC transfers using different logic:
+- For ETH: Simple transfer with `to`, `value`, and `data` parameters
+- For USDC: Encodes an ERC-20 transfer function call
 
-To learn more about Next.js, take a look at the following resources:
+### `checkUSDCBalance()` and `checkBalances()`
+Queries on-chain balances of ETH and USDC tokens for display and validation before transfers.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn-pages-router) - an interactive Next.js tutorial.
+### `fundUserWallet()`
+Integrates with Privy's funding modal to allow adding funds to the wallet.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Current Limitations
 
-## Deploy on Vercel
+### Storage Security
+- **Local Storage**: Private keys are stored in browser `localStorage`, which is not secure for production use
+- **No Encryption**: Keys are stored in plaintext without additional encryption
+- **Session Persistence**: Session may be lost if `localStorage` is cleared
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Contract Interaction
+- **Limited Contract Interaction**: We haven't implemented general smart contract interaction beyond simple transfers
+- **No Custom Function Calls**: Can't yet call arbitrary functions on any contract
+- **No Contract Deployment**: No functionality to deploy new contracts
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/pages/building-your-application/deploying) for more details.
+### Transaction Handling
+- **No Paymaster for ERC-20**: Transferring USDC requires ETH for gas, as we don't have a dedicated paymaster for ERC-20 transactions
+- **No Batched Transactions**: Can't execute multiple transactions in a single user operation
+- **Limited Error Handling**: Transaction failures could be handled more gracefully
+
+### Session Key Management
+- **Basic Policies**: We use sudo policies which grant full permissions rather than granular control
+- **No Expiration**: Session keys don't expire and must be manually revoked by resetting the wallet
+- **No Multiple Sessions**: There's no management of multiple session keys for different purposes
+
+## How Key Storage Works
+When a wallet is created, the application:
+- Generates a private key and stores it in React state
+- Saves this key to `localStorage` using the key `zeroDevWalletInfo`
+- On page refresh or new session, checks `localStorage` for existing keys
+- If found, reconstructs the wallet and session key using the saved private keys
+
+This approach means the wallet persists even when the page is reloaded, but is tied to the specific browser/device.
+
+In a production application, you'd want to use more secure key management techniques, like storing encrypted keys in a secured enclave or potentially using MPC (Multi-Party Computation) approaches.
+
+## Future Enhancements
+- Implement secure key storage (encryption, secure enclave, etc.)
+- Add general contract interaction capabilities
+- Implement paymasters for gasless ERC-20 transactions
+- Create better session key policy management
+- Add batched transaction support
+- Improve error handling and recovery
+- Implement proper key rotation and expiration
+- Add support for multiple session keys with different permissions
+
+## Key Storage Locations
+The private keys are stored in your browser's `localStorage`. Specifically:
+- The wallet's private key is saved under the key `zeroDevWalletInfo`. You can see this in the code:
+    ```javascript
+    localStorage.setItem(STORAGE_KEYS.walletInfo, JSON.stringify(smartWalletInfo));
+    ```
+- The session key's private key is saved under the key `zeroDevSessionInfo`:
+    ```javascript
+    localStorage.setItem(STORAGE_KEYS.sessionInfo, JSON.stringify(sessionInfo));
+    ```
+
+When you refresh the page or come back to the application later, it checks `localStorage` for these saved keys and reconstructs the wallet and session key clients using them. This is why your wallet persists across browser sessions.
+
+You can actually see these stored values by:
+1. Opening your browser's developer tools (`F12` or right-click → Inspect)
+2. Going to the "Application" tab
+3. Expanding "Local Storage" on the left
+4. Clicking on your site's domain
+5. Looking for the `zeroDevWalletInfo` and `zeroDevSessionInfo` entries
+
+This is a simple approach for demo purposes, but for production applications, you'd want more secure key storage solutions as mentioned in the summary.

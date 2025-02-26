@@ -3,7 +3,7 @@ import { PrivyProvider, usePrivy, useWallets, useFundWallet } from "@privy-io/re
 import Head from "next/head";
 import toast from "react-hot-toast";
 import { privateKeyToAccount } from "viem/accounts";
-import { createPublicClient, parseEther } from 'viem';
+import { createPublicClient, parseEther, encodeFunctionData } from 'viem';
 import { base } from 'viem/chains';
 import { http } from 'viem';
 import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator"
@@ -14,6 +14,7 @@ import { serializePermissionAccount, toPermissionValidator } from "@zerodev/perm
 import { toECDSASigner } from "@zerodev/permissions/signers";
 import { toSudoPolicy } from "@zerodev/permissions/policies";
 import { KernelAccountClient } from '@zerodev/sdk';
+import axios from 'axios';
 
 // Configuration for BASE network
 const BASE_CONFIG = {
@@ -25,10 +26,14 @@ const BASE_CONFIG = {
   publicRpc: "https://mainnet.base.org"
 };
 
-// Storage keys
-const STORAGE_KEYS = {
-  walletInfo: "zeroDevWalletInfo",
-  sessionInfo: "zeroDevSessionInfo"
+// USDC token address on BASE
+const USDC_TOKEN_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+
+// API endpoints for wallet storage
+const API_ENDPOINTS = {
+  getWalletData: (userId: string) => `/api/wallet-storage?userId=${userId}`,
+  saveWalletData: '/api/wallet-storage',
+  deleteWalletData: '/api/wallet-storage'
 };
 
 // Define types for wallet and session key info
@@ -46,11 +51,26 @@ interface SessionKeyInfo {
   network: string;
 }
 
-// Simplified transfer function
+// ERC-20 transfer ABI
+const erc20TransferAbi = [
+  {
+    "inputs": [
+      {"name": "to", "type": "address"},
+      {"name": "value", "type": "uint256"}
+    ],
+    "name": "transfer",
+    "outputs": [{"name": "", "type": "bool"}],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+];
+
+// Updated transfer function to handle both ETH and USDC transfers
 async function transfer(
   kernelClient: any,
   toAddress: string,
-  amount: bigint
+  amount: bigint,
+  tokenAddress?: string // Optional parameter for token address
 ) {
   try {
     // Ensure toAddress is a valid hex string
@@ -58,23 +78,87 @@ async function transfer(
       throw new Error('Invalid address format');
     }
 
-    console.log("Transfer parameters:", {
-      to: toAddress,
-      value: amount.toString(), // Convert BigInt to string for logging
-    });
+    if (tokenAddress) {
+      // ERC-20 token transfer (USDC)
+      console.log("USDC Transfer parameters:", {
+        to: tokenAddress,
+        tokenAmount: amount.toString(),
+        recipient: toAddress
+      });
 
-    // Use the simpler sendTransaction API
-    const userOpHash = await kernelClient.sendTransaction({
-      to: toAddress,
-      value: amount,
-      data: "0x",
-    });
-    
-    console.log("Native token transfer userOpHash:", userOpHash);
-    return userOpHash;
+      // Encode the transfer function call
+      const data = encodeFunctionData({
+        abi: erc20TransferAbi,
+        functionName: 'transfer',
+        args: [toAddress, amount]
+      });
+
+      // Send the transaction using the simplified API
+      const userOpHash = await kernelClient.sendTransaction({
+        to: tokenAddress,
+        value: 0n, // No ETH being sent
+        data: data,
+      });
+      
+      console.log("USDC transfer userOpHash:", userOpHash);
+      return userOpHash;
+    } else {
+      // Native token (ETH) transfer
+      console.log("ETH Transfer parameters:", {
+        to: toAddress,
+        value: amount.toString(),
+      });
+
+      // Use the simpler sendTransaction API
+      const userOpHash = await kernelClient.sendTransaction({
+        to: toAddress,
+        value: amount,
+        data: "0x",
+      });
+      
+      console.log("Native token transfer userOpHash:", userOpHash);
+      return userOpHash;
+    }
   } catch (error) {
     console.error("Error executing transfer:", error);
     throw error;
+  }
+}
+
+// Function to check USDC balance
+async function checkUSDCBalance(address: string) {
+  try {
+    const publicClient = createPublicClient({
+      chain: base,
+      transport: http(BASE_CONFIG.publicRpc),
+    });
+
+    // ERC-20 balanceOf ABI
+    const erc20BalanceOfAbi = [
+      {
+        "inputs": [
+          {"name": "account", "type": "address"}
+        ],
+        "name": "balanceOf",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function"
+      }
+    ];
+
+    // Call the balanceOf function
+    const balance = await publicClient.readContract({
+      address: USDC_TOKEN_ADDRESS,
+      abi: erc20BalanceOfAbi,
+      functionName: 'balanceOf',
+      args: [address],
+    });
+
+    console.log(`USDC Balance for ${address}: ${balance}`);
+    return balance;
+  } catch (error) {
+    console.error("Error checking USDC balance:", error);
+    return 0n;
   }
 }
 
@@ -140,33 +224,38 @@ function MainApp() {
   const [transferHash, setTransferHash] = useState(null);
   const [transferLoading, setTransferLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [usdcBalance, setUsdcBalance] = useState<bigint | null>(null);
+  const [ethBalance, setEthBalance] = useState<bigint | null>(null);
+  const [checkingBalance, setCheckingBalance] = useState(false);
 
   // Target address for sending funds
   const TARGET_ADDRESS = "0x8D33614Cbc97B59F8408aD67E520549F57F80055";
-  // Amount in USD converted to ETH (very approximate for demo)
-  const AMOUNT_ETH = parseEther("0.000005"); // Approximate 0.01 USD worth of ETH on BASE
+  // Amount for USDC (0.01 USDC = 10000 units with 6 decimals)
+  const AMOUNT_USDC = BigInt(10000); // 0.01 USDC
 
   // Function to load the existing wallet and session key from storage
   useEffect(() => {
     async function loadExistingWallet() {
-      if (!authenticated || !wallets.length || isInitialized) return;
+      if (!authenticated || !wallets.length || isInitialized || !user?.id) return;
       
       try {
         setIsLoading(true);
         
-        // Try to load wallet info from localStorage
-        const savedWalletInfo = localStorage.getItem(STORAGE_KEYS.walletInfo);
-        const savedSessionInfo = localStorage.getItem(STORAGE_KEYS.sessionInfo);
-        
-        if (savedWalletInfo && savedSessionInfo) {
-          const walletData = JSON.parse(savedWalletInfo);
-          const sessionData = JSON.parse(savedSessionInfo);
+        // Try to load wallet info from API
+        try {
+          const response = await axios.get(API_ENDPOINTS.getWalletData(user.id));
           
-          console.log("Found saved wallet data:", walletData);
-          console.log("Found saved session data:", sessionData);
-          
-          // Initialize the wallet and session client using the saved data
-          await initializeFromSavedData(walletData, sessionData);
+          if (response.data) {
+            const { walletInfo: walletData, sessionKeyInfo: sessionData } = response.data;
+            
+            console.log("Found saved wallet data:", walletData);
+            console.log("Found saved session data:", sessionData);
+            
+            // Initialize the wallet and session client using the saved data
+            await initializeFromSavedData(walletData, sessionData);
+          }
+        } catch (error) {
+          console.log("No existing wallet data found for this user");
         }
       } catch (error) {
         console.error("Error loading saved wallet:", error);
@@ -178,7 +267,42 @@ function MainApp() {
     }
     
     loadExistingWallet();
-  }, [authenticated, wallets]);
+  }, [authenticated, wallets, user?.id]);
+
+  // Effect to check balances when wallet is initialized
+  useEffect(() => {
+    if (walletInfo?.address) {
+      checkBalances();
+    }
+  }, [walletInfo?.address]);
+
+  // Function to check both ETH and USDC balances
+  async function checkBalances() {
+    if (!walletInfo?.address) return;
+
+    setCheckingBalance(true);
+    try {
+      // Check USDC balance
+      const usdc = await checkUSDCBalance(walletInfo.address);
+      setUsdcBalance(usdc);
+
+      // Check ETH balance
+      const publicClient = createPublicClient({
+        chain: base,
+        transport: http(BASE_CONFIG.publicRpc),
+      });
+      
+      const eth = await publicClient.getBalance({
+        address: walletInfo.address as `0x${string}`,
+      });
+      
+      setEthBalance(eth);
+    } catch (error) {
+      console.error("Error checking balances:", error);
+    } finally {
+      setCheckingBalance(false);
+    }
+  }
 
   // Initialize kernel clients from saved data
   async function initializeFromSavedData(walletData: any, sessionData: any) {
@@ -343,11 +467,6 @@ function MainApp() {
       
       setWalletInfo(smartWalletInfo);
       
-      // Save to localStorage for persistence
-      localStorage.setItem(STORAGE_KEYS.walletInfo, JSON.stringify(smartWalletInfo));
-      
-      toast.success("Smart Wallet created on BASE network!");
-
       // ======= STEP 2: CREATE SESSION KEY =======
       
       // Generate a new session key
@@ -412,10 +531,27 @@ function MainApp() {
       
       setSessionKeyInfo(sessionInfo);
       
-      // Save to localStorage for persistence
-      localStorage.setItem(STORAGE_KEYS.sessionInfo, JSON.stringify(sessionInfo));
+      // Save to API for persistence
+      if (user?.id) {
+        try {
+          await axios.post(API_ENDPOINTS.saveWalletData, {
+            userId: user.id,
+            walletInfo: smartWalletInfo,
+            sessionKeyInfo: sessionInfo
+          });
+          console.log("Wallet data saved to API");
+        } catch (error) {
+          console.error("Error saving wallet data to API:", error);
+          toast.error("Failed to save wallet data");
+        }
+      } else {
+        console.warn("No user ID available, cannot save wallet data");
+      }
       
       toast.success("Session Key created and linked to smart wallet on BASE!");
+      
+      // Check balances after wallet creation
+      setTimeout(() => checkBalances(), 2000);
       
       return {
         smartWallet: smartWalletInfo,
@@ -432,20 +568,34 @@ function MainApp() {
 
   // Function to reset wallet and create a new one
   function resetWallet() {
-    localStorage.removeItem(STORAGE_KEYS.walletInfo);
-    localStorage.removeItem(STORAGE_KEYS.sessionInfo);
+    // Delete wallet data from API
+    if (user?.id) {
+      axios.delete(API_ENDPOINTS.deleteWalletData, {
+        data: { userId: user.id }
+      }).catch(error => {
+        console.error("Error deleting wallet data from API:", error);
+      });
+    }
+    
     setWalletInfo(null);
     setSessionKeyInfo(null);
     setKernelClient(null);
     setSessionClient(null);
     setTransferHash(null);
+    setUsdcBalance(null);
+    setEthBalance(null);
     toast.success("Wallet data cleared. You can now create a new wallet.");
   }
 
-  // Function to send a small amount of ETH
-  async function sendDonation() {
+  // Function to send USDC
+  async function sendUSDC() {
     if (!sessionClient) {
       toast.error("No session client available. Please create a wallet first.");
+      return;
+    }
+
+    if (!usdcBalance || usdcBalance < AMOUNT_USDC) {
+      toast.error("Insufficient USDC balance. Please fund your wallet first.");
       return;
     }
 
@@ -454,15 +604,20 @@ function MainApp() {
       const txHash = await transfer(
         sessionClient,
         TARGET_ADDRESS,
-        AMOUNT_ETH
+        AMOUNT_USDC,
+        USDC_TOKEN_ADDRESS // Pass the USDC token address
       );
       
       setTransferHash(txHash);
-      toast.success("Successfully sent 0.01 USD worth of ETH!");
+      toast.success("Successfully sent 0.01 USDC!");
+      
+      // Update balances after transfer
+      setTimeout(() => checkBalances(), 5000);
+      
       return txHash;
     } catch (error) {
-      toast.error("Error sending funds");
-      console.error("Error sending funds:", error);
+      toast.error("Error sending USDC");
+      console.error("Error sending USDC:", error);
     } finally {
       setTransferLoading(false);
     }
@@ -478,7 +633,10 @@ function MainApp() {
     try {
       setIsLoading(true);
       await fundWallet(walletInfo.address);
-      toast.success("Wallet funded successfully!");
+      toast.success("Funding process initiated!");
+      
+      // Schedule a check for updated balances
+      setTimeout(() => checkBalances(), 10000);
     } catch (error) {
       console.error("Error funding wallet:", error);
       toast.error("Failed to fund wallet");
@@ -491,13 +649,24 @@ function MainApp() {
   const handleLogout = async () => {
     try {
       await logout();
-      // Clear wallet data on logout for security
-      resetWallet(); 
+      // Don't clear wallet data on logout for persistence
       toast.success("Logged out successfully");
     } catch (error) {
       console.error("Error logging out:", error);
       toast.error("Error logging out");
     }
+  };
+
+  // Format USDC balance for display (6 decimals)
+  const formatUsdcBalance = (balance: bigint | null) => {
+    if (balance === null) return "Loading...";
+    return (Number(balance) / 1_000_000).toFixed(6);
+  };
+
+  // Format ETH balance for display (18 decimals)
+  const formatEthBalance = (balance: bigint | null) => {
+    if (balance === null) return "Loading...";
+    return (Number(balance) / 1_000_000_000_000_000_000).toFixed(6);
   };
 
   return (
@@ -557,11 +726,11 @@ function MainApp() {
               
               {sessionClient && (
                 <Button 
-                  onClick={sendDonation}
-                  disabled={transferLoading || !sessionClient}
+                  onClick={sendUSDC}
+                  disabled={transferLoading || !sessionClient || !usdcBalance || usdcBalance < AMOUNT_USDC}
                   color="green"
                 >
-                  {transferLoading ? "Sending..." : "Send 0.01 USD"}
+                  {transferLoading ? "Sending..." : "Send 0.01 USDC"}
                 </Button>
               )}
               
@@ -571,7 +740,17 @@ function MainApp() {
                   disabled={isLoading}
                   color="blue"
                 >
-                  {isLoading ? "Funding..." : "Fund Wallet"}
+                  {isLoading ? "Opening..." : "Fund Wallet"}
+                </Button>
+              )}
+              
+              {walletInfo && (
+                <Button 
+                  onClick={checkBalances}
+                  disabled={checkingBalance}
+                  color="gray"
+                >
+                  {checkingBalance ? "Checking..." : "Refresh Balances"}
                 </Button>
               )}
             </div>
@@ -583,6 +762,12 @@ function MainApp() {
                   <div className="grid grid-cols-1 gap-2">
                     <div>
                       <span className="font-semibold">Address:</span> {walletInfo.address}
+                    </div>
+                    <div>
+                      <span className="font-semibold">ETH Balance:</span> {formatEthBalance(ethBalance)} ETH
+                    </div>
+                    <div>
+                      <span className="font-semibold">USDC Balance:</span> {formatUsdcBalance(usdcBalance)} USDC
                     </div>
                     <div>
                       <span className="font-semibold">Index:</span> {walletInfo.index}
@@ -621,9 +806,18 @@ function MainApp() {
               {/* Transfer Information */}
               {sessionClient && (
                 <InfoCard title="Transfer Funds" color="indigo">
-                  <p className="mb-4">Send 0.01 USD worth of ETH to: 
+                  <p className="mb-4">Send 0.01 USDC to: 
                     <span className="font-mono text-sm ml-2 bg-indigo-100 p-1 rounded">{TARGET_ADDRESS}</span>
                   </p>
+                  
+                  {usdcBalance && usdcBalance < AMOUNT_USDC && (
+                    <div className="mb-4 p-3 border rounded-lg bg-yellow-50">
+                      <p className="text-yellow-800">
+                        <span className="font-semibold">Warning:</span> Insufficient USDC balance. 
+                        Please fund your wallet with USDC first.
+                      </p>
+                    </div>
+                  )}
                   
                   {transferHash && (
                     <div className="mt-4 p-3 border rounded-lg bg-green-50">
@@ -681,7 +875,20 @@ export default function Home() {
         <meta name="description" content="A proof of concept for Privy authentication" />
       </Head>
       
-      <PrivyProvider appId={process.env.NEXT_PUBLIC_PRIVY_APP_ID || "default_app_id"}>
+      <PrivyProvider 
+        appId={process.env.NEXT_PUBLIC_PRIVY_APP_ID || "default_app_id"}
+        config={{
+          fundingMethodConfig: {
+            moonpay: {
+              paymentMethod: 'credit_debit_card',
+              uiConfig: {
+                accentColor: '#696FFD',
+                theme: 'light',
+              },
+            },
+          },
+        }}
+      >
         <MainApp />
       </PrivyProvider>
     </>

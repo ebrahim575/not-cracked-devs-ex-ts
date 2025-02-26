@@ -13,6 +13,7 @@
     "@zerodev/ecdsa-validator": "^5.4.4",
     "@zerodev/permissions": "^5.5.2",
     "@zerodev/sdk": "^5.4.23",
+    "axios": "^1.8.0",
     "next": "^15.1.7",
     "permissionless": "^0.2.34",
     "react": "^19.0.0",
