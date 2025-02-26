@@ -12,6 +12,7 @@ import { createKernelAccount, createKernelAccountClient, createZeroDevPaymasterC
 import { generatePrivateKey } from "viem/accounts";
 import { serializePermissionAccount, toPermissionValidator } from "@zerodev/permissions";
 import { toECDSASigner } from "@zerodev/permissions/signers";
+import { toSudoPolicy } from "@zerodev/permissions/policies";
 
 // Configuration for BASE network
 const BASE_CONFIG = {
@@ -29,22 +30,30 @@ const STORAGE_KEYS = {
   sessionInfo: "zeroDevSessionInfo"
 };
 
-// Updated transfer function based on ZeroDev documentation
+// Simplified transfer function
 async function transfer(
   kernelClient,
   toAddress,
   amount
 ) {
   try {
-    // Native token (ETH) transfer using encodeCalls method
-    const userOpHash = await kernelClient.sendUserOperation({
-      callData: kernelClient.account.encodeCalls([{
-        to: toAddress,
-        value: amount,
-        data: "0x",
-      }]),
+    // Ensure toAddress is a valid hex string
+    if (!toAddress.startsWith('0x')) {
+      throw new Error('Invalid address format');
+    }
+
+    console.log("Transfer parameters:", {
+      to: toAddress,
+      value: amount.toString(), // Convert BigInt to string for logging
     });
 
+    // Use the simpler sendTransaction API
+    const userOpHash = await kernelClient.sendTransaction({
+      to: toAddress,
+      value: amount,
+      data: "0x",
+    });
+    
     console.log("Native token transfer userOpHash:", userOpHash);
     return userOpHash;
   } catch (error) {
@@ -53,38 +62,47 @@ async function transfer(
   }
 }
 
-// Login Button Component
-function LoginButton() {
-  const { login, authenticated } = usePrivy();
+// Button Component for consistent styling
+function Button({ onClick, disabled, color, children }) {
+  const colorClasses = {
+    blue: "bg-blue-600 hover:bg-blue-700 focus:ring-blue-300 dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800",
+    purple: "bg-purple-600 hover:bg-purple-700 focus:ring-purple-300 dark:bg-purple-600 dark:hover:bg-purple-700 dark:focus:ring-purple-800",
+    green: "bg-green-600 hover:bg-green-700 focus:ring-green-300 dark:bg-green-600 dark:hover:bg-green-700 dark:focus:ring-green-800",
+    red: "bg-red-600 hover:bg-red-700 focus:ring-red-300 dark:bg-red-600 dark:hover:bg-red-700 dark:focus:ring-red-800",
+    gray: "bg-gray-600 hover:bg-gray-700 focus:ring-gray-300 dark:bg-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-800",
+  };
 
   return (
     <button
       type="button"
-      onClick={authenticated ? undefined : login}
-      className="text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-blue-600 dark:hover:bg-blue-700 focus:outline-none dark:focus:ring-blue-800"
+      onClick={onClick}
+      disabled={disabled}
+      className={`text-white ${colorClasses[color]} focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 w-full min-w-[200px] h-12 disabled:opacity-70 disabled:cursor-not-allowed`}
     >
-      {authenticated ? "Connected" : "Login"}
+      {children}
     </button>
   );
 }
 
-// Wallet Info Component
-function WalletInfo() {
-  const { wallets } = useWallets(); // Hook to get wallets
+// Info Card Component for consistent styling
+function InfoCard({ title, children, color = "gray" }) {
+  const colorClasses = {
+    gray: "bg-gray-50",
+    indigo: "bg-indigo-50",
+    green: "bg-green-50",
+  };
 
   return (
-    <div className="mt-4 p-4 border rounded-lg bg-gray-50">
-      <h2 className="text-xl font-semibold mb-2">Wallet Information</h2>
-      <p>
-        Wallet Address: {wallets?.[0]?.address || "No wallet found"}
-      </p>
+    <div className={`p-4 border rounded-lg ${colorClasses[color]} w-full break-words mb-4`}>
+      <h2 className="text-xl font-semibold mb-3">{title}</h2>
+      {children}
     </div>
   );
 }
 
 // Main Application Component
 function MainApp() {
-  const { authenticated, user } = usePrivy();
+  const { authenticated, user, logout, login } = usePrivy();
   const { wallets } = useWallets();
   
   // State for storing wallet and session key info
@@ -196,10 +214,13 @@ function MainApp() {
       const sessionSigner = privateKeyToAccount(sessionData.privateKey);
       const sessionKeyValidator = await toECDSASigner({ signer: sessionSigner });
       
+      // Create sudo policy for full permissions
+      const sudoPolicy = toSudoPolicy({});
+      
       const permissionPlugin = await toPermissionValidator(publicClient, {
         entryPoint: entryPoint,
         signer: sessionKeyValidator,
-        policies: [], // Empty means all permissions allowed
+        policies: [sudoPolicy], // Use sudo policy instead of empty array
         kernelVersion: KERNEL_V3_1,
       });
       
@@ -353,11 +374,14 @@ function MainApp() {
       // Create the session key validator
       const sessionKeyValidator = await toECDSASigner({ signer: sessionKeySigner });
       
+      // Create sudo policy for full permissions
+      const sudoPolicy = toSudoPolicy({});
+      
       // Create permission plugin for the session key
       const permissionPlugin = await toPermissionValidator(publicClient, {
         entryPoint: entryPoint,
         signer: sessionKeyValidator,
-        policies: [], // Empty means all permissions allowed
+        policies: [sudoPolicy], // Use sudo policy instead of empty array
         kernelVersion: KERNEL_V3_1,
       });
 
@@ -477,119 +501,160 @@ function MainApp() {
     }
   }
 
-  // Combined button for creating wallet and session key
-  function CreateWalletAndSessionKeyButton() {
-    const handleClick = async () => {
-      await createWalletAndSessionKey();
-    };
-
-    return (
-      <button
-        type="button"
-        onClick={handleClick}
-        disabled={isLoading || walletInfo !== null}
-        className="text-white bg-purple-700 hover:bg-purple-800 focus:ring-4 focus:ring-purple-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-purple-600 dark:hover:bg-purple-700 focus:outline-none dark:focus:ring-purple-800"
-      >
-        {isLoading ? "Creating..." : "Create Wallet & Session Key on BASE"}
-      </button>
-    );
-  }
-
-  // Reset button component
-  function ResetButton() {
-    return (
-      <button
-        type="button"
-        onClick={resetWallet}
-        className="text-white bg-red-700 hover:bg-red-800 focus:ring-4 focus:ring-red-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-red-600 dark:hover:bg-red-700 focus:outline-none dark:focus:ring-red-800"
-      >
-        Reset Wallet
-      </button>
-    );
-  }
-
-  // Transfer button component
-  function TransferButton() {
-    const handleClick = async () => {
-      await sendDonation();
-    };
-
-    return (
-      <button
-        type="button"
-        onClick={handleClick}
-        disabled={transferLoading || !sessionClient}
-        className="text-white bg-green-700 hover:bg-green-800 focus:ring-4 focus:ring-green-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-green-600 dark:hover:bg-green-700 focus:outline-none dark:focus:ring-green-800"
-      >
-        {transferLoading ? "Sending..." : "Send 0.01 USD to Target Address"}
-      </button>
-    );
-  }
+  // Handle logout
+  const handleLogout = async () => {
+    try {
+      await logout();
+      // Clear wallet data on logout for security
+      resetWallet(); 
+      toast.success("Logged out successfully");
+    } catch (error) {
+      console.error("Error logging out:", error);
+      toast.error("Error logging out");
+    }
+  };
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center p-24">
-      <div className="flex flex-col items-center justify-center gap-6 w-full max-w-3xl">
-        <h1 className="text-4xl font-bold">Privy Login Demo</h1>
-        <LoginButton />
+    <div className="flex min-h-screen flex-col items-center justify-center p-8">
+      <div className="flex flex-col items-center justify-center gap-6 w-full max-w-2xl">
+        <h1 className="text-4xl font-bold mb-4">Privy Login Demo</h1>
+        
+        {/* Login/Logout Section */}
+        <div className="w-full flex gap-4 justify-center">
+          {!authenticated ? (
+            <Button 
+              onClick={login}
+              color="blue"
+            >
+              Login
+            </Button>
+          ) : (
+            <Button 
+              onClick={handleLogout}
+              color="gray"
+            >
+              Logout
+            </Button>
+          )}
+        </div>
+        
         {authenticated && (
           <>
-            <WalletInfo />
-            <div className="flex gap-4">
-              <CreateWalletAndSessionKeyButton />
-              {walletInfo && <ResetButton />}
+            {/* Wallet Info Section */}
+            <InfoCard title="Wallet Information">
+              <p>
+                Privy Wallet Address: {wallets?.[0]?.address || "No wallet found"}
+              </p>
+            </InfoCard>
+            
+            {/* Action Buttons */}
+            <div className="w-full flex flex-wrap gap-4 justify-center">
+              <Button 
+                onClick={createWalletAndSessionKey}
+                disabled={isLoading || walletInfo !== null}
+                color="purple"
+              >
+                {isLoading ? "Creating..." : "Create Wallet & Session Key"}
+              </Button>
+              
+              {walletInfo && (
+                <Button 
+                  onClick={resetWallet}
+                  color="red"
+                >
+                  Reset Wallet
+                </Button>
+              )}
+              
+              {sessionClient && (
+                <Button 
+                  onClick={sendDonation}
+                  disabled={transferLoading || !sessionClient}
+                  color="green"
+                >
+                  {transferLoading ? "Sending..." : "Send 0.01 USD"}
+                </Button>
+              )}
             </div>
             
-            {walletInfo && (
-              <div className="mt-4 p-4 border rounded-lg bg-gray-50 w-full break-words">
-                <h2 className="text-xl font-semibold mb-2">Smart Wallet (BASE Network)</h2>
-                <p>Address: {walletInfo.address}</p>
-                <p>Index: {walletInfo.index}</p>
-                <p>Network: {walletInfo.network}</p>
-                <p className="mt-2 text-sm text-gray-500">Private key (for demo purposes only):</p>
-                <p className="font-mono text-xs">{walletInfo.privateKey}</p>
-              </div>
-            )}
-            
-            {sessionKeyInfo && (
-              <div className="mt-4 p-4 border rounded-lg bg-gray-50 w-full break-words">
-                <h2 className="text-xl font-semibold mb-2">Session Key (BASE Network)</h2>
-                <p>Session Key Address: {sessionKeyInfo.address}</p>
-                <p>Linked to Wallet: {sessionKeyInfo.accountAddress}</p>
-                <p>Network: {sessionKeyInfo.network}</p>
-                <p className="mt-2 text-sm text-gray-500">Session private key (for demo purposes only):</p>
-                <p className="font-mono text-xs">{sessionKeyInfo.privateKey}</p>
-              </div>
-            )}
-            
-            {sessionClient && (
-              <div className="mt-4 w-full">
-                <div className="p-4 border rounded-lg bg-indigo-50 mb-4">
-                  <h2 className="text-xl font-semibold mb-2">Transfer Funds</h2>
-                  <p>Send 0.01 USD worth of ETH to: {TARGET_ADDRESS}</p>
-                </div>
-                <TransferButton />
-                
-                {transferHash && (
-                  <div className="mt-4 p-4 border rounded-lg bg-green-50">
-                    <h3 className="text-lg font-semibold mb-2">Transaction Sent!</h3>
-                    <p>User Operation Hash: {transferHash}</p>
-                    <a 
-                      href={`https://basescan.org/tx/${transferHash}`} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:underline mt-2 inline-block"
-                    >
-                      View on BaseScan
-                    </a>
+            {/* Wallet Details Section */}
+            <div className="w-full mt-2">
+              {walletInfo && (
+                <InfoCard title="Smart Wallet (BASE Network)">
+                  <div className="grid grid-cols-1 gap-2">
+                    <div>
+                      <span className="font-semibold">Address:</span> {walletInfo.address}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Index:</span> {walletInfo.index}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Network:</span> {walletInfo.network}
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500 mt-2">Private key (demo only):</p>
+                      <p className="font-mono text-xs overflow-x-auto bg-gray-100 p-2 rounded">{walletInfo.privateKey}</p>
+                    </div>
                   </div>
-                )}
-              </div>
-            )}
-            
-            <div className="mt-4 p-4 border rounded-lg bg-gray-50 w-full">
-              <h2 className="text-xl font-semibold mb-2">Connected User</h2>
-              <p>User ID: {user?.id}</p>
-              <p>Email: {user?.email?.address || "Not provided"}</p>
+                </InfoCard>
+              )}
+              
+              {sessionKeyInfo && (
+                <InfoCard title="Session Key (BASE Network)">
+                  <div className="grid grid-cols-1 gap-2">
+                    <div>
+                      <span className="font-semibold">Session Key Address:</span> {sessionKeyInfo.address}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Linked to Wallet:</span> {sessionKeyInfo.accountAddress}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Network:</span> {sessionKeyInfo.network}
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500 mt-2">Session private key (demo only):</p>
+                      <p className="font-mono text-xs overflow-x-auto bg-gray-100 p-2 rounded">{sessionKeyInfo.privateKey}</p>
+                    </div>
+                  </div>
+                </InfoCard>
+              )}
+              
+              {/* Transfer Information */}
+              {sessionClient && (
+                <InfoCard title="Transfer Funds" color="indigo">
+                  <p className="mb-4">Send 0.01 USD worth of ETH to: 
+                    <span className="font-mono text-sm ml-2 bg-indigo-100 p-1 rounded">{TARGET_ADDRESS}</span>
+                  </p>
+                  
+                  {transferHash && (
+                    <div className="mt-4 p-3 border rounded-lg bg-green-50">
+                      <h3 className="text-lg font-semibold mb-2">Transaction Sent!</h3>
+                      <p className="mb-2">User Operation Hash:</p>
+                      <p className="font-mono text-xs bg-white p-2 rounded overflow-x-auto">{transferHash}</p>
+                      <a 
+                        href={`https://basescan.org/tx/${transferHash}`} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline mt-3 inline-block"
+                      >
+                        View on BaseScan
+                      </a>
+                    </div>
+                  )}
+                </InfoCard>
+              )}
+              
+              {/* User Info */}
+              <InfoCard title="Connected User">
+                <div className="grid grid-cols-1 gap-2">
+                  <div>
+                    <span className="font-semibold">User ID:</span> {user?.id}
+                  </div>
+                  <div>
+                    <span className="font-semibold">Email:</span> {user?.email?.address || "Not provided"}
+                  </div>
+                </div>
+              </InfoCard>
             </div>
           </>
         )}
