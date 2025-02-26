@@ -23,7 +23,12 @@ const BASE_CONFIG = {
   publicRpc: "https://mainnet.base.org"
 };
 
-// Transfer function
+// Storage keys
+const STORAGE_KEYS = {
+  walletInfo: "zeroDevWalletInfo",
+  sessionInfo: "zeroDevSessionInfo"
+};
+
 // Updated transfer function based on ZeroDev documentation
 async function transfer(
   kernelClient,
@@ -90,11 +95,156 @@ function MainApp() {
   const [isLoading, setIsLoading] = useState(false);
   const [transferHash, setTransferHash] = useState(null);
   const [transferLoading, setTransferLoading] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
 
   // Target address for sending funds
   const TARGET_ADDRESS = "0x8D33614Cbc97B59F8408aD67E520549F57F80055";
   // Amount in USD converted to ETH (very approximate for demo)
   const AMOUNT_ETH = parseEther("0.000005"); // Approximate 0.01 USD worth of ETH on BASE
+
+  // Function to load the existing wallet and session key from storage
+  useEffect(() => {
+    async function loadExistingWallet() {
+      if (!authenticated || !wallets.length || isInitialized) return;
+      
+      try {
+        setIsLoading(true);
+        
+        // Try to load wallet info from localStorage
+        const savedWalletInfo = localStorage.getItem(STORAGE_KEYS.walletInfo);
+        const savedSessionInfo = localStorage.getItem(STORAGE_KEYS.sessionInfo);
+        
+        if (savedWalletInfo && savedSessionInfo) {
+          const walletData = JSON.parse(savedWalletInfo);
+          const sessionData = JSON.parse(savedSessionInfo);
+          
+          console.log("Found saved wallet data:", walletData);
+          console.log("Found saved session data:", sessionData);
+          
+          // Initialize the wallet and session client using the saved data
+          await initializeFromSavedData(walletData, sessionData);
+        }
+      } catch (error) {
+        console.error("Error loading saved wallet:", error);
+        toast.error("Failed to load saved wallet");
+      } finally {
+        setIsLoading(false);
+        setIsInitialized(true);
+      }
+    }
+    
+    loadExistingWallet();
+  }, [authenticated, wallets]);
+
+  // Initialize kernel clients from saved data
+  async function initializeFromSavedData(walletData, sessionData) {
+    try {
+      // Get the entry point
+      const entryPoint = getEntryPoint("0.7");
+      
+      // Create the public client
+      const publicClient = createPublicClient({
+        chain: base,
+        transport: http(BASE_CONFIG.publicRpc),
+      });
+      
+      // Recreate the wallet signer
+      const walletSigner = privateKeyToAccount(walletData.privateKey);
+      
+      // Recreate the ECDSA validator
+      const ecdsaValidator = await signerToEcdsaValidator(publicClient, {
+        signer: walletSigner,
+        entryPoint: entryPoint,
+        kernelVersion: KERNEL_V3_1,
+      });
+      
+      // Recreate the wallet account
+      const walletAccount = await createKernelAccount(publicClient, {
+        kernelVersion: KERNEL_V3_1,
+        plugins: {
+          sudo: ecdsaValidator,
+        },
+        entryPoint: entryPoint,
+        index: BigInt(walletData.index),
+      });
+      
+      // Create the kernel client
+      const myKernelClient = createKernelAccountClient({
+        account: walletAccount,
+        chain: base,
+        entryPoint: entryPoint,
+        bundlerTransport: http(BASE_CONFIG.bundlerRpc),
+        middleware: {
+          sponsorUserOperation: async ({ userOperation }) => {
+            const zerodevPaymaster = createZeroDevPaymasterClient({
+              chain: base,
+              entryPoint: entryPoint,
+              transport: http(BASE_CONFIG.paymasterRpc),
+            });
+            return zerodevPaymaster.sponsorUserOperation({
+              userOperation,
+              entryPoint: entryPoint,
+            });
+          },
+        },
+      });
+      
+      setKernelClient(myKernelClient);
+      setWalletInfo(walletData);
+      
+      // Now recreate the session key client
+      const sessionSigner = privateKeyToAccount(sessionData.privateKey);
+      const sessionKeyValidator = await toECDSASigner({ signer: sessionSigner });
+      
+      const permissionPlugin = await toPermissionValidator(publicClient, {
+        entryPoint: entryPoint,
+        signer: sessionKeyValidator,
+        policies: [], // Empty means all permissions allowed
+        kernelVersion: KERNEL_V3_1,
+      });
+      
+      const sessionKeyAccount = await createKernelAccount(publicClient, {
+        entryPoint: entryPoint,
+        plugins: { 
+          sudo: ecdsaValidator, 
+          regular: permissionPlugin 
+        },
+        kernelVersion: KERNEL_V3_1,
+        index: BigInt(walletData.index),
+      });
+      
+      const mySessionClient = createKernelAccountClient({
+        account: sessionKeyAccount,
+        chain: base,
+        entryPoint: entryPoint,
+        bundlerTransport: http(BASE_CONFIG.bundlerRpc),
+        middleware: {
+          sponsorUserOperation: async ({ userOperation }) => {
+            const zerodevPaymaster = createZeroDevPaymasterClient({
+              chain: base,
+              entryPoint: entryPoint,
+              transport: http(BASE_CONFIG.paymasterRpc),
+            });
+            return zerodevPaymaster.sponsorUserOperation({
+              userOperation,
+              entryPoint: entryPoint,
+            });
+          },
+        },
+      });
+      
+      setSessionClient(mySessionClient);
+      setSessionKeyInfo(sessionData);
+      
+      toast.success("Loaded existing wallet and session key");
+    } catch (error) {
+      console.error("Error initializing from saved data:", error);
+      toast.error("Failed to initialize the saved wallet");
+      // Clear the stored data if we can't initialize from it
+      localStorage.removeItem(STORAGE_KEYS.walletInfo);
+      localStorage.removeItem(STORAGE_KEYS.sessionInfo);
+    }
+  }
 
   // Combined function to create smart wallet and session key in one step
   async function createWalletAndSessionKey() {
@@ -187,6 +337,10 @@ function MainApp() {
       };
       
       setWalletInfo(smartWalletInfo);
+      
+      // Save to localStorage for persistence
+      localStorage.setItem(STORAGE_KEYS.walletInfo, JSON.stringify(smartWalletInfo));
+      
       toast.success("Smart Wallet created on BASE network!");
 
       // ======= STEP 2: CREATE SESSION KEY =======
@@ -266,6 +420,10 @@ function MainApp() {
       };
       
       setSessionKeyInfo(sessionInfo);
+      
+      // Save to localStorage for persistence
+      localStorage.setItem(STORAGE_KEYS.sessionInfo, JSON.stringify(sessionInfo));
+      
       toast.success("Session Key created and linked to smart wallet on BASE!");
       
       return {
@@ -279,6 +437,18 @@ function MainApp() {
     } finally {
       setIsLoading(false);
     }
+  }
+
+  // Function to reset wallet and create a new one
+  function resetWallet() {
+    localStorage.removeItem(STORAGE_KEYS.walletInfo);
+    localStorage.removeItem(STORAGE_KEYS.sessionInfo);
+    setWalletInfo(null);
+    setSessionKeyInfo(null);
+    setKernelClient(null);
+    setSessionClient(null);
+    setTransferHash(null);
+    toast.success("Wallet data cleared. You can now create a new wallet.");
   }
 
   // Function to send a small amount of ETH
@@ -317,10 +487,23 @@ function MainApp() {
       <button
         type="button"
         onClick={handleClick}
-        disabled={isLoading}
+        disabled={isLoading || walletInfo !== null}
         className="text-white bg-purple-700 hover:bg-purple-800 focus:ring-4 focus:ring-purple-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-purple-600 dark:hover:bg-purple-700 focus:outline-none dark:focus:ring-purple-800"
       >
         {isLoading ? "Creating..." : "Create Wallet & Session Key on BASE"}
+      </button>
+    );
+  }
+
+  // Reset button component
+  function ResetButton() {
+    return (
+      <button
+        type="button"
+        onClick={resetWallet}
+        className="text-white bg-red-700 hover:bg-red-800 focus:ring-4 focus:ring-red-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-red-600 dark:hover:bg-red-700 focus:outline-none dark:focus:ring-red-800"
+      >
+        Reset Wallet
       </button>
     );
   }
@@ -351,7 +534,10 @@ function MainApp() {
         {authenticated && (
           <>
             <WalletInfo />
-            <CreateWalletAndSessionKeyButton />
+            <div className="flex gap-4">
+              <CreateWalletAndSessionKeyButton />
+              {walletInfo && <ResetButton />}
+            </div>
             
             {walletInfo && (
               <div className="mt-4 p-4 border rounded-lg bg-gray-50 w-full break-words">
