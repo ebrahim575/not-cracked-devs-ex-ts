@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { PrivyProvider, usePrivy, useWallets } from "@privy-io/react-auth";
+import { PrivyProvider, usePrivy, useWallets, useFundWallet } from "@privy-io/react-auth";
 import Head from "next/head";
 import toast from "react-hot-toast";
 import { privateKeyToAccount } from "viem/accounts";
@@ -13,6 +13,7 @@ import { generatePrivateKey } from "viem/accounts";
 import { serializePermissionAccount, toPermissionValidator } from "@zerodev/permissions";
 import { toECDSASigner } from "@zerodev/permissions/signers";
 import { toSudoPolicy } from "@zerodev/permissions/policies";
+import { KernelAccountClient } from '@zerodev/sdk';
 
 // Configuration for BASE network
 const BASE_CONFIG = {
@@ -30,11 +31,26 @@ const STORAGE_KEYS = {
   sessionInfo: "zeroDevSessionInfo"
 };
 
+// Define types for wallet and session key info
+interface WalletInfo {
+  address: string;
+  privateKey: string;
+  index: string;
+  network: string;
+}
+
+interface SessionKeyInfo {
+  address: string;
+  privateKey: string;
+  accountAddress: string;
+  network: string;
+}
+
 // Simplified transfer function
 async function transfer(
-  kernelClient,
-  toAddress,
-  amount
+  kernelClient: any,
+  toAddress: string,
+  amount: bigint
 ) {
   try {
     // Ensure toAddress is a valid hex string
@@ -63,7 +79,12 @@ async function transfer(
 }
 
 // Button Component for consistent styling
-function Button({ onClick, disabled, color, children }) {
+function Button({ onClick, disabled, color, children }: {
+  onClick: () => void;
+  disabled: boolean;
+  color: 'blue' | 'purple' | 'green' | 'red' | 'gray';
+  children: React.ReactNode;
+}) {
   const colorClasses = {
     blue: "bg-blue-600 hover:bg-blue-700 focus:ring-blue-300 dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800",
     purple: "bg-purple-600 hover:bg-purple-700 focus:ring-purple-300 dark:bg-purple-600 dark:hover:bg-purple-700 dark:focus:ring-purple-800",
@@ -85,7 +106,11 @@ function Button({ onClick, disabled, color, children }) {
 }
 
 // Info Card Component for consistent styling
-function InfoCard({ title, children, color = "gray" }) {
+function InfoCard({ title, children, color = "gray" }: {
+  title: string;
+  children: React.ReactNode;
+  color?: 'gray' | 'indigo' | 'green';
+}) {
   const colorClasses = {
     gray: "bg-gray-50",
     indigo: "bg-indigo-50",
@@ -104,12 +129,13 @@ function InfoCard({ title, children, color = "gray" }) {
 function MainApp() {
   const { authenticated, user, logout, login } = usePrivy();
   const { wallets } = useWallets();
+  const { fundWallet } = useFundWallet();
   
   // State for storing wallet and session key info
-  const [walletInfo, setWalletInfo] = useState(null);
-  const [sessionKeyInfo, setSessionKeyInfo] = useState(null);
-  const [kernelClient, setKernelClient] = useState(null);
-  const [sessionClient, setSessionClient] = useState(null);
+  const [walletInfo, setWalletInfo] = useState<WalletInfo | null>(null);
+  const [sessionKeyInfo, setSessionKeyInfo] = useState<SessionKeyInfo | null>(null);
+  const [kernelClient, setKernelClient] = useState<any>(null);
+  const [sessionClient, setSessionClient] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [transferHash, setTransferHash] = useState(null);
   const [transferLoading, setTransferLoading] = useState(false);
@@ -155,7 +181,7 @@ function MainApp() {
   }, [authenticated, wallets]);
 
   // Initialize kernel clients from saved data
-  async function initializeFromSavedData(walletData, sessionData) {
+  async function initializeFromSavedData(walletData: any, sessionData: any) {
     try {
       // Get the entry point
       const entryPoint = getEntryPoint("0.7");
@@ -190,25 +216,11 @@ function MainApp() {
       const myKernelClient = createKernelAccountClient({
         account: walletAccount,
         chain: base,
-        entryPoint: entryPoint,
         bundlerTransport: http(BASE_CONFIG.bundlerRpc),
-        middleware: {
-          sponsorUserOperation: async ({ userOperation }) => {
-            const zerodevPaymaster = createZeroDevPaymasterClient({
-              chain: base,
-              entryPoint: entryPoint,
-              transport: http(BASE_CONFIG.paymasterRpc),
-            });
-            return zerodevPaymaster.sponsorUserOperation({
-              userOperation,
-              entryPoint: entryPoint,
-            });
-          },
-        },
       });
       
       setKernelClient(myKernelClient);
-      setWalletInfo(walletData);
+      setWalletInfo(walletData as WalletInfo);
       
       // Now recreate the session key client
       const sessionSigner = privateKeyToAccount(sessionData.privateKey);
@@ -237,25 +249,11 @@ function MainApp() {
       const mySessionClient = createKernelAccountClient({
         account: sessionKeyAccount,
         chain: base,
-        entryPoint: entryPoint,
         bundlerTransport: http(BASE_CONFIG.bundlerRpc),
-        middleware: {
-          sponsorUserOperation: async ({ userOperation }) => {
-            const zerodevPaymaster = createZeroDevPaymasterClient({
-              chain: base,
-              entryPoint: entryPoint,
-              transport: http(BASE_CONFIG.paymasterRpc),
-            });
-            return zerodevPaymaster.sponsorUserOperation({
-              userOperation,
-              entryPoint: entryPoint,
-            });
-          },
-        },
       });
       
       setSessionClient(mySessionClient);
-      setSessionKeyInfo(sessionData);
+      setSessionKeyInfo(sessionData as SessionKeyInfo);
       
       toast.success("Loaded existing wallet and session key");
     } catch (error) {
@@ -326,21 +324,7 @@ function MainApp() {
       const myKernelClient = createKernelAccountClient({
         account,
         chain: base,
-        entryPoint: entryPoint,
         bundlerTransport: http(BASE_CONFIG.bundlerRpc),
-        middleware: {
-          sponsorUserOperation: async ({ userOperation }) => {
-            const zerodevPaymaster = createZeroDevPaymasterClient({
-              chain: base,
-              entryPoint: entryPoint,
-              transport: http(BASE_CONFIG.paymasterRpc),
-            });
-            return zerodevPaymaster.sponsorUserOperation({
-              userOperation,
-              entryPoint: entryPoint,
-            });
-          },
-        },
       });
       
       console.log('Smart Wallet Account:', myKernelClient);
@@ -355,7 +339,7 @@ function MainApp() {
         privateKey: walletPrivateKey,
         index: accountIndex.toString(),
         network: "BASE"
-      };
+      } as WalletInfo;
       
       setWalletInfo(smartWalletInfo);
       
@@ -402,21 +386,7 @@ function MainApp() {
       const mySessionClient = createKernelAccountClient({
         account: sessionKeyAccount,
         chain: base,
-        entryPoint: entryPoint,
         bundlerTransport: http(BASE_CONFIG.bundlerRpc),
-        middleware: {
-          sponsorUserOperation: async ({ userOperation }) => {
-            const zerodevPaymaster = createZeroDevPaymasterClient({
-              chain: base,
-              entryPoint: entryPoint,
-              transport: http(BASE_CONFIG.paymasterRpc),
-            });
-            return zerodevPaymaster.sponsorUserOperation({
-              userOperation,
-              entryPoint: entryPoint,
-            });
-          },
-        },
       });
       
       setSessionClient(mySessionClient);
@@ -432,16 +402,13 @@ function MainApp() {
         }
       }
       
-      // Create a serialized account
-      const serialized = serializePermissionAccount(sessionKeyAccount);
-      
       // Save session key info to state
       const sessionInfo = {
         address: sessionKeySigner.address,
         privateKey: sessionKeyPrivateKey,
         accountAddress: sessionKeyAccount.address,
         network: "BASE"
-      };
+      } as SessionKeyInfo;
       
       setSessionKeyInfo(sessionInfo);
       
@@ -501,6 +468,25 @@ function MainApp() {
     }
   }
 
+  // Function to fund the user's smart wallet
+  async function fundUserWallet() {
+    if (!walletInfo) {
+      toast.error("No wallet information available. Please create a wallet first.");
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      await fundWallet(walletInfo.address);
+      toast.success("Wallet funded successfully!");
+    } catch (error) {
+      console.error("Error funding wallet:", error);
+      toast.error("Failed to fund wallet");
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
   // Handle logout
   const handleLogout = async () => {
     try {
@@ -524,6 +510,7 @@ function MainApp() {
           {!authenticated ? (
             <Button 
               onClick={login}
+              disabled={false}
               color="blue"
             >
               Login
@@ -531,6 +518,7 @@ function MainApp() {
           ) : (
             <Button 
               onClick={handleLogout}
+              disabled={false}
               color="gray"
             >
               Logout
@@ -560,6 +548,7 @@ function MainApp() {
               {walletInfo && (
                 <Button 
                   onClick={resetWallet}
+                  disabled={false}
                   color="red"
                 >
                   Reset Wallet
@@ -573,6 +562,16 @@ function MainApp() {
                   color="green"
                 >
                   {transferLoading ? "Sending..." : "Send 0.01 USD"}
+                </Button>
+              )}
+              
+              {walletInfo && (
+                <Button 
+                  onClick={fundUserWallet}
+                  disabled={isLoading}
+                  color="blue"
+                >
+                  {isLoading ? "Funding..." : "Fund Wallet"}
                 </Button>
               )}
             </div>
@@ -682,7 +681,7 @@ export default function Home() {
         <meta name="description" content="A proof of concept for Privy authentication" />
       </Head>
       
-      <PrivyProvider appId={process.env.NEXT_PUBLIC_PRIVY_APP_ID}>
+      <PrivyProvider appId={process.env.NEXT_PUBLIC_PRIVY_APP_ID || "default_app_id"}>
         <MainApp />
       </PrivyProvider>
     </>
