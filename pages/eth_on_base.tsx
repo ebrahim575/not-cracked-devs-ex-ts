@@ -65,11 +65,24 @@ async function transferETH(
       value: amount.toString(),
     });
 
+    const paymasterClient = createZeroDevPaymasterClient({
+      chain: base,
+      // Get this RPC from ZeroDev dashboard
+      transport: http(BASE_CONFIG.zerodev_paymaster_url),
+    });
+
     // Send the transaction
     const userOpHash = await kernelClient.sendTransaction({
       to: toAddress,
       value: amount,
       data: "0x",
+      paymaster: {
+        getPaymasterData: (userOperation) => {
+          return paymasterClient.sponsorUserOperation({
+            userOperation,
+          })
+        }
+      },
     });
     
     console.log("ETH transfer userOpHash:", userOpHash);
@@ -238,6 +251,11 @@ function MainApp() {
         entryPoint: entryPoint,
         kernelVersion: KERNEL_V3_1,
       });
+
+      const paymasterClient = createZeroDevPaymasterClient({
+        chain: base,
+        transport: http(BASE_CONFIG.zerodev_paymaster_url),
+      });
       
       // Recreate the wallet account
       const walletAccount = await createKernelAccount(publicClient, {
@@ -254,6 +272,13 @@ function MainApp() {
         account: walletAccount,
         chain: base,
         bundlerTransport: http(BASE_CONFIG.bundlerRpc),
+        paymaster: {
+          getPaymasterData: (userOperation) => {
+            return paymasterClient.sponsorUserOperation({
+              userOperation,
+            })
+          }
+        },
       });
       
       setKernelClient(myKernelClient);
@@ -287,6 +312,13 @@ function MainApp() {
         account: sessionKeyAccount,
         chain: base,
         bundlerTransport: http(BASE_CONFIG.bundlerRpc),
+        paymaster: {
+          getPaymasterData: (userOperation) => {
+            return paymasterClient.sponsorUserOperation({
+              userOperation,
+            })
+          }
+        },
       });
       
       setSessionClient(mySessionClient);
@@ -428,6 +460,13 @@ function MainApp() {
         account: sessionKeyAccount,
         chain: base,
         bundlerTransport: http(BASE_CONFIG.bundlerRpc),
+        paymaster: {
+          getPaymasterData: (userOperation) => {
+            return paymasterClient.sponsorUserOperation({
+              userOperation,
+            })
+          }
+        },
       });
       
       setSessionClient(mySessionClient);

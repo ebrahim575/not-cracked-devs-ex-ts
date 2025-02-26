@@ -111,7 +111,6 @@ async function transfer(
             })
           }
         },
-        paymasterInput: ''
       });
       
       console.log("USDC transfer userOpHash:", userOpHash);
