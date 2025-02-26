@@ -16,14 +16,14 @@ import { toSudoPolicy } from "@zerodev/permissions/policies";
 import { KernelAccountClient } from '@zerodev/sdk';
 import axios from 'axios';
 
-// Configuration for BASE network using environment variables
+// Configuration for BASE network
 const BASE_CONFIG = {
   projectId: process.env.NEXT_PUBLIC_ZERODEV_PROJECT_ID || '',
   chain: base,
   chainId: 8453,
   bundlerRpc: process.env.NEXT_PUBLIC_ZERODEV_BUNDLER_URL || '',
+  publicRpc: "https://mainnet.base.org",
   zerodev_paymaster_url: process.env.NEXT_PUBLIC_ZERODEV_PAYMASTER_URL || '',
-  publicRpc: "https://mainnet.base.org"
 };
 
 // USDC token address on BASE
@@ -384,8 +384,8 @@ function MainApp() {
       console.error("Error initializing from saved data:", error);
       toast.error("Failed to initialize the saved wallet");
       // Clear the stored data if we can't initialize from it
-      localStorage.removeItem('walletInfo');
-      localStorage.removeItem('sessionInfo');
+      localStorage.removeItem(STORAGE_KEYS.walletInfo);
+      localStorage.removeItem(STORAGE_KEYS.sessionInfo);
     }
   }
 
@@ -446,7 +446,8 @@ function MainApp() {
       
       const paymasterClient = createZeroDevPaymasterClient({
         chain: base,
-        transport: http(BASE_CONFIG.zerodev_paymaster_url),
+        // Get this RPC from ZeroDev dashboard
+        transport: http(BASE_CONFIG.paymasterRpc),
       });
       
       // Create kernel account client with BASE network and paymaster
@@ -461,7 +462,7 @@ function MainApp() {
             })
           }
         },
-      });
+        });
       
       console.log('Smart Wallet Account:', myKernelClient);
       setKernelClient(myKernelClient);
@@ -684,7 +685,7 @@ function MainApp() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center p-8">
       <div className="flex flex-col items-center justify-center gap-6 w-full max-w-2xl">
-        <h1 className="text-4xl font-bold mb-4">USDC on BASE Demo</h1>
+        <h1 className="text-4xl font-bold mb-4">Privy Login Demo</h1>
         
         {/* Login/Logout Section */}
         <div className="w-full flex gap-4 justify-center">
@@ -775,66 +776,6 @@ function MainApp() {
                     <div>
                       <span className="font-semibold">Address:</span> {walletInfo.address}
                     </div>
-                  )}
-                </InfoCard>
-              )}
-              
-              {/* User Info */}
-              <InfoCard title="Connected User">
-                <div className="grid grid-cols-1 gap-2">
-                  <div>
-                    <span className="font-semibold">User ID:</span> {user?.id}
-                  </div>
-                  <div>
-                    <span className="font-semibold">Email:</span> {user?.email?.address || "Not provided"}
-                  </div>
-                </div>
-              </InfoCard>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Root Component with Provider
-export default function Home() {
-  const [isClient, setIsClient] = useState(false);
-
-  useEffect(() => {
-    setIsClient(true);
-  }, []);
-
-  if (!isClient) {
-    return <div>Loading...</div>;
-  }
-
-  return (
-    <>
-      <Head>
-        <title>USDC on BASE Transfer Demo</title>
-        <meta name="description" content="A proof of concept for USDC transfers on BASE using Privy authentication" />
-      </Head>
-      
-      <PrivyProvider 
-        appId={BASE_CONFIG.projectId}
-        config={{
-          fundingMethodConfig: {
-            moonpay: {
-              paymentMethod: 'credit_debit_card',
-              uiConfig: {
-                accentColor: '#696FFD',
-                theme: 'light',
-              },
-            },
-          },
-        }}
-      >
-        <MainApp />
-      </PrivyProvider>
-    </>
-  );
                     <div>
                       <span className="font-semibold">ETH Balance:</span> {formatEthBalance(ethBalance)} ETH
                     </div>
@@ -877,7 +818,7 @@ export default function Home() {
               
               {/* Transfer Information */}
               {sessionClient && (
-                <InfoCard title="Transfer USDC" color="indigo">
+                <InfoCard title="Transfer Funds" color="indigo">
                   <p className="mb-4">Send 0.01 USDC to: 
                     <span className="font-mono text-sm ml-2 bg-indigo-100 p-1 rounded">{TARGET_ADDRESS}</span>
                   </p>
@@ -905,3 +846,64 @@ export default function Home() {
                         View on BaseScan
                       </a>
                     </div>
+                  )}
+                </InfoCard>
+              )}
+              
+              {/* User Info */}
+              <InfoCard title="Connected User">
+                <div className="grid grid-cols-1 gap-2">
+                  <div>
+                    <span className="font-semibold">User ID:</span> {user?.id}
+                  </div>
+                  <div>
+                    <span className="font-semibold">Email:</span> {user?.email?.address || "Not provided"}
+                  </div>
+                </div>
+              </InfoCard>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Root Component with Provider
+export default function Home() {
+  const [isClient, setIsClient] = useState(false);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
+  if (!isClient) {
+    return <div>Loading...</div>;
+  }
+
+  return (
+    <>
+      <Head>
+        <title>Privy Login Demo</title>
+        <meta name="description" content="A proof of concept for Privy authentication" />
+      </Head>
+      
+      <PrivyProvider 
+        appId={BASE_CONFIG.projectId}
+        config={{
+          fundingMethodConfig: {
+            moonpay: {
+              paymentMethod: 'credit_debit_card',
+              uiConfig: {
+                accentColor: '#696FFD',
+                theme: 'light',
+              },
+            },
+          },
+        }}
+      >
+        <MainApp />
+      </PrivyProvider>
+    </>
+  );
+}
