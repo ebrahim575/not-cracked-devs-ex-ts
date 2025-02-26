@@ -3,15 +3,50 @@ import { PrivyProvider, usePrivy, useWallets } from "@privy-io/react-auth";
 import Head from "next/head";
 import toast from "react-hot-toast";
 import { privateKeyToAccount } from "viem/accounts";
-import { createPublicClient } from 'viem';
-import { base } from 'viem/chains'; // Import BASE network instead of mainnet
+import { createPublicClient, parseEther } from 'viem';
+import { base } from 'viem/chains';
 import { http } from 'viem';
 import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator"
 import { getEntryPoint, KERNEL_V3_1 } from "@zerodev/sdk/constants";
-import { createKernelAccount, createKernelAccountClient } from "@zerodev/sdk"; // Import the necessary functions
+import { createKernelAccount, createKernelAccountClient, createZeroDevPaymasterClient } from "@zerodev/sdk";
 import { generatePrivateKey } from "viem/accounts";
 import { serializePermissionAccount, toPermissionValidator } from "@zerodev/permissions";
 import { toECDSASigner } from "@zerodev/permissions/signers";
+
+// Configuration for BASE network
+const BASE_CONFIG = {
+  projectId: "e9ce930f-06e5-4f51-b60e-d404163db7b7",
+  chain: base,
+  chainId: 8453,
+  bundlerRpc: "https://rpc.zerodev.app/api/v2/bundler/e9ce930f-06e5-4f51-b60e-d404163db7b7",
+  paymasterRpc: "https://rpc.zerodev.app/api/v2/paymaster/e9ce930f-06e5-4f51-b60e-d404163db7b7",
+  publicRpc: "https://mainnet.base.org"
+};
+
+// Transfer function
+// Updated transfer function based on ZeroDev documentation
+async function transfer(
+  kernelClient,
+  toAddress,
+  amount
+) {
+  try {
+    // Native token (ETH) transfer using encodeCalls method
+    const userOpHash = await kernelClient.sendUserOperation({
+      callData: kernelClient.account.encodeCalls([{
+        to: toAddress,
+        value: amount,
+        data: "0x",
+      }]),
+    });
+
+    console.log("Native token transfer userOpHash:", userOpHash);
+    return userOpHash;
+  } catch (error) {
+    console.error("Error executing transfer:", error);
+    throw error;
+  }
+}
 
 // Login Button Component
 function LoginButton() {
@@ -50,7 +85,16 @@ function MainApp() {
   // State for storing wallet and session key info
   const [walletInfo, setWalletInfo] = useState(null);
   const [sessionKeyInfo, setSessionKeyInfo] = useState(null);
+  const [kernelClient, setKernelClient] = useState(null);
+  const [sessionClient, setSessionClient] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [transferHash, setTransferHash] = useState(null);
+  const [transferLoading, setTransferLoading] = useState(false);
+
+  // Target address for sending funds
+  const TARGET_ADDRESS = "0x8D33614Cbc97B59F8408aD67E520549F57F80055";
+  // Amount in USD converted to ETH (very approximate for demo)
+  const AMOUNT_ETH = parseEther("0.000005"); // Approximate 0.01 USD worth of ETH on BASE
 
   // Combined function to create smart wallet and session key in one step
   async function createWalletAndSessionKey() {
@@ -71,9 +115,12 @@ function MainApp() {
 
       // Create public client using BASE network
       const publicClient = createPublicClient({
-        chain: base, // Use BASE network instead of mainnet
-        transport: http(),
+        chain: base,
+        transport: http(BASE_CONFIG.publicRpc),
       });
+
+      // Get the entry point address for version 0.7
+      const entryPoint = getEntryPoint("0.7");
 
       // ======= STEP 1: CREATE SMART WALLET =======
       
@@ -87,7 +134,7 @@ function MainApp() {
       // Create ECDSA validator for the smart wallet
       const ecdsaValidator = await signerToEcdsaValidator(publicClient, {
         signer: smartAccountSigner,
-        entryPoint: getEntryPoint("0.7"),
+        entryPoint: entryPoint,
         kernelVersion: KERNEL_V3_1,
       });
 
@@ -100,19 +147,35 @@ function MainApp() {
         plugins: {
           sudo: ecdsaValidator,
         },
-        entryPoint: getEntryPoint("0.7"),
+        entryPoint: entryPoint,
         index: accountIndex,
       });
       
-      // Create kernel account client with BASE network
-      const kernelClient = createKernelAccountClient({
+      // Create kernel account client with BASE network and paymaster
+      const myKernelClient = createKernelAccountClient({
         account,
-        chain: base, // Use BASE network instead of mainnet
-        bundlerTransport: http(process.env.NEXT_PUBLIC_ZERODEV_BUNDLER_URL),
+        chain: base,
+        entryPoint: entryPoint,
+        bundlerTransport: http(BASE_CONFIG.bundlerRpc),
+        middleware: {
+          sponsorUserOperation: async ({ userOperation }) => {
+            const zerodevPaymaster = createZeroDevPaymasterClient({
+              chain: base,
+              entryPoint: entryPoint,
+              transport: http(BASE_CONFIG.paymasterRpc),
+            });
+            return zerodevPaymaster.sponsorUserOperation({
+              userOperation,
+              entryPoint: entryPoint,
+            });
+          },
+        },
       });
       
-      console.log('Smart Wallet Account:', kernelClient);
-      const smartWalletAddress = kernelClient.account.address;
+      console.log('Smart Wallet Account:', myKernelClient);
+      setKernelClient(myKernelClient);
+      
+      const smartWalletAddress = myKernelClient.account.address;
       console.log('Smart Wallet Address:', smartWalletAddress);
       
       // Save smart wallet info to state
@@ -138,7 +201,7 @@ function MainApp() {
       
       // Create permission plugin for the session key
       const permissionPlugin = await toPermissionValidator(publicClient, {
-        entryPoint: getEntryPoint("0.7"),
+        entryPoint: entryPoint,
         signer: sessionKeyValidator,
         policies: [], // Empty means all permissions allowed
         kernelVersion: KERNEL_V3_1,
@@ -146,7 +209,7 @@ function MainApp() {
 
       // Create the session key account with the SAME INDEX as the smart wallet
       const sessionKeyAccount = await createKernelAccount(publicClient, {
-        entryPoint: getEntryPoint("0.7"),
+        entryPoint: entryPoint,
         plugins: { 
           sudo: ecdsaValidator,     // Main key has full access
           regular: permissionPlugin // Session key has limited access
@@ -156,6 +219,29 @@ function MainApp() {
       });
 
       console.log('Session key account created:', sessionKeyAccount);
+      
+      // Create a kernel client for the session key
+      const mySessionClient = createKernelAccountClient({
+        account: sessionKeyAccount,
+        chain: base,
+        entryPoint: entryPoint,
+        bundlerTransport: http(BASE_CONFIG.bundlerRpc),
+        middleware: {
+          sponsorUserOperation: async ({ userOperation }) => {
+            const zerodevPaymaster = createZeroDevPaymasterClient({
+              chain: base,
+              entryPoint: entryPoint,
+              transport: http(BASE_CONFIG.paymasterRpc),
+            });
+            return zerodevPaymaster.sponsorUserOperation({
+              userOperation,
+              entryPoint: entryPoint,
+            });
+          },
+        },
+      });
+      
+      setSessionClient(mySessionClient);
       
       // Verify the addresses match (with proper null checking)
       if (sessionKeyAccount.address && smartWalletAddress) {
@@ -195,6 +281,32 @@ function MainApp() {
     }
   }
 
+  // Function to send a small amount of ETH
+  async function sendDonation() {
+    if (!sessionClient) {
+      toast.error("No session client available. Please create a wallet first.");
+      return;
+    }
+
+    setTransferLoading(true);
+    try {
+      const txHash = await transfer(
+        sessionClient,
+        TARGET_ADDRESS,
+        AMOUNT_ETH
+      );
+      
+      setTransferHash(txHash);
+      toast.success("Successfully sent 0.01 USD worth of ETH!");
+      return txHash;
+    } catch (error) {
+      toast.error("Error sending funds");
+      console.error("Error sending funds:", error);
+    } finally {
+      setTransferLoading(false);
+    }
+  }
+
   // Combined button for creating wallet and session key
   function CreateWalletAndSessionKeyButton() {
     const handleClick = async () => {
@@ -209,6 +321,24 @@ function MainApp() {
         className="text-white bg-purple-700 hover:bg-purple-800 focus:ring-4 focus:ring-purple-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-purple-600 dark:hover:bg-purple-700 focus:outline-none dark:focus:ring-purple-800"
       >
         {isLoading ? "Creating..." : "Create Wallet & Session Key on BASE"}
+      </button>
+    );
+  }
+
+  // Transfer button component
+  function TransferButton() {
+    const handleClick = async () => {
+      await sendDonation();
+    };
+
+    return (
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={transferLoading || !sessionClient}
+        className="text-white bg-green-700 hover:bg-green-800 focus:ring-4 focus:ring-green-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-green-600 dark:hover:bg-green-700 focus:outline-none dark:focus:ring-green-800"
+      >
+        {transferLoading ? "Sending..." : "Send 0.01 USD to Target Address"}
       </button>
     );
   }
@@ -242,6 +372,31 @@ function MainApp() {
                 <p>Network: {sessionKeyInfo.network}</p>
                 <p className="mt-2 text-sm text-gray-500">Session private key (for demo purposes only):</p>
                 <p className="font-mono text-xs">{sessionKeyInfo.privateKey}</p>
+              </div>
+            )}
+            
+            {sessionClient && (
+              <div className="mt-4 w-full">
+                <div className="p-4 border rounded-lg bg-indigo-50 mb-4">
+                  <h2 className="text-xl font-semibold mb-2">Transfer Funds</h2>
+                  <p>Send 0.01 USD worth of ETH to: {TARGET_ADDRESS}</p>
+                </div>
+                <TransferButton />
+                
+                {transferHash && (
+                  <div className="mt-4 p-4 border rounded-lg bg-green-50">
+                    <h3 className="text-lg font-semibold mb-2">Transaction Sent!</h3>
+                    <p>User Operation Hash: {transferHash}</p>
+                    <a 
+                      href={`https://basescan.org/tx/${transferHash}`} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline mt-2 inline-block"
+                    >
+                      View on BaseScan
+                    </a>
+                  </div>
+                )}
               </div>
             )}
             
