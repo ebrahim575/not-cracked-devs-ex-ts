@@ -1,3 +1,56 @@
+# Setting Up a Next.js Project
+
+## 1. Install Node.js  
+Make sure you have **Node.js 18+** installed. Check your version with:  
+```sh
+node -v
+```
+
+## 2. Create a New Next.js App  
+Run the following command to create a Next.js project:  
+```sh
+npx create-next-app@latest my-next-app
+# or
+yarn create next-app my-next-app
+# or
+pnpm create next-app my-next-app
+```
+
+## 3. Navigate to Your Project  
+```sh
+cd my-next-app
+```
+
+## 4. Start the Development Server  
+```sh
+npm run dev
+# or
+yarn dev
+# or
+pnpm dev
+```
+This starts the app at **http://localhost:3000**.
+
+## 5. Build & Deploy  
+To build the project for production, run:  
+```sh
+npm run build
+```
+To start the production server:  
+```sh
+npm run start
+```
+
+## 6. Optional: Add Tailwind CSS  
+To use Tailwind, install it with:  
+```sh
+npm install -D tailwindcss postcss autoprefixer
+npx tailwindcss init -p
+```
+Then, configure `tailwind.config.js` and add Tailwind to `globals.css`.
+
+You're now ready to build with Next.js!
+
 # Smart Wallet with Session Keys: Application Summary
 
 ## Overview
