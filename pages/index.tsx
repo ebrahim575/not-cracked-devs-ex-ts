@@ -3,7 +3,7 @@ import { PrivyProvider, usePrivy, useWallets, useFundWallet } from "@privy-io/re
 import Head from "next/head";
 import toast from "react-hot-toast";
 import { privateKeyToAccount } from "viem/accounts";
-import { createPublicClient, parseEther, encodeFunctionData } from 'viem';
+import { createPublicClient, parseEther, encodeFunctionData, getContract } from 'viem';
 import { base } from 'viem/chains';
 import { http } from 'viem';
 import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator"
@@ -26,8 +26,76 @@ const BASE_CONFIG = {
   zerodev_paymaster_url: process.env.NEXT_PUBLIC_ZERODEV_PAYMASTER_URL || '',
 };
 
+// Payment details from Coinbase Commerce
+const PAYMENT_DETAILS = {
+  chargeId: "87ea05ae-01f8-4fe8-b602-321475c6472c",
+  transferIntent: {
+    callData: {
+      deadline: "2025-03-01T06:19:59Z",
+      feeAmount: "100", // 0.0001 USDC fee
+      id: "0xc8f9e661fe654bca8554192fe0d22ca4", // Unique ID for this payment
+      operator: "0x8fccc78dae0a8f93b0fe6799de888d4c57e273db",
+      prefix: "0x4b3220496e666f726d6174696f6e616c204d6573736167653a20333220",
+      recipient: "0x5eA054aEea285Ebc3A92eCB1f722f44304F72581",
+      recipientAmount: "9900", // 0.0099 USDC
+      recipientCurrency: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // USDC on BASE
+      refundDestination: "0xac8CeB5131449e5850030737D10d1E25C6b8D80B",
+      signature: "0xb443cf656f962b42888621d23fdb90f4dea6801df07da4722ab381d1aacefd0c1fbbc473762409427b899aaeb69e7afa00444e9221e297cdc9a2c7d99a86ae521c"
+    },
+    metadata: {
+      chainId: 8453,
+      contractAddress: "0x03059433BCdB6144624cC2443159D9445C32b7a8",
+      sender: "0xac8CeB5131449e5850030737D10d1E25C6b8D80B"
+    }
+  }
+};
+
 // USDC token address on BASE
 const USDC_TOKEN_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+
+// Coinbase Commerce contract address on BASE
+const COMMERCE_CONTRACT_ADDRESS = "0x03059433BCdB6144624cC2443159D9445C32b7a8";
+
+// Total payment amount in USDC (0.01)
+const PAYMENT_AMOUNT = "0.01";
+
+// Coinbase Commerce contract ABI (simplified to include only what we need)
+const commerceContractAbi = [
+  {
+    "inputs": [
+      {
+        "components": [
+          {"internalType": "uint256", "name": "recipientAmount", "type": "uint256"},
+          {"internalType": "uint256", "name": "deadline", "type": "uint256"},
+          {"internalType": "address payable", "name": "recipient", "type": "address"},
+          {"internalType": "address", "name": "recipientCurrency", "type": "address"},
+          {"internalType": "address", "name": "refundDestination", "type": "address"},
+          {"internalType": "uint256", "name": "feeAmount", "type": "uint256"},
+          {"internalType": "bytes16", "name": "id", "type": "bytes16"},
+          {"internalType": "address", "name": "operator", "type": "address"},
+          {"internalType": "bytes", "name": "signature", "type": "bytes"},
+          {"internalType": "bytes", "name": "prefix", "type": "bytes"}
+        ],
+        "internalType": "struct TransferIntent",
+        "name": "_intent",
+        "type": "tuple"
+      },
+      {
+        "components": [
+          {"internalType": "address", "name": "owner", "type": "address"},
+          {"internalType": "bytes", "name": "signature", "type": "bytes"}
+        ],
+        "internalType": "struct EIP2612SignatureTransferData",
+        "name": "_signatureTransferData",
+        "type": "tuple"
+      }
+    ],
+    "name": "subsidizedTransferToken",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+];
 
 // API endpoints for wallet storage
 const API_ENDPOINTS = {
@@ -214,6 +282,131 @@ function InfoCard({ title, children, color = "gray" }: {
   );
 }
 
+// Function to decode known error codes
+function decodeErrorCode(errorCode: string): string {
+  // Common error codes for the Coinbase Commerce contract
+  const errorCodes: Record<string, string> = {
+    "0x8baa579f": "Payment ID already processed or invalid",
+    "0x7939f424": "Transfer intent validation failed",
+    "0x4ca88867": "Invalid signature",
+    "0x2b5b6d5c": "Deadline expired",
+    "0x8c0b5e22": "Insufficient allowance",
+    "0x8a8a1b3a": "Insufficient balance"
+  };
+  
+  return errorCodes[errorCode] || "Unknown error code";
+}
+
+// Function to execute Coinbase Commerce payment
+async function executeCommercePayment(
+  kernelClient: any,
+  transferIntentData: any,
+  paymasterClient: any
+) {
+  try {
+    console.log("Executing Commerce payment with intent data:", transferIntentData);
+    
+    // Convert deadline string to Unix timestamp
+    const deadlineTimestamp = Math.floor(new Date(transferIntentData.callData.deadline).getTime() / 1000);
+    console.log("Deadline timestamp:", deadlineTimestamp, "Current timestamp:", Math.floor(Date.now() / 1000));
+    
+    // Format the TransferIntent parameter
+    const transferIntent = {
+      recipientAmount: BigInt(transferIntentData.callData.recipientAmount),
+      deadline: BigInt(deadlineTimestamp),
+      recipient: transferIntentData.callData.recipient,
+      recipientCurrency: transferIntentData.callData.recipientCurrency,
+      refundDestination: transferIntentData.callData.refundDestination,
+      feeAmount: BigInt(transferIntentData.callData.feeAmount),
+      id: transferIntentData.callData.id,
+      operator: transferIntentData.callData.operator,
+      signature: transferIntentData.callData.signature,
+      prefix: transferIntentData.callData.prefix
+    };
+
+    // For the second parameter, we need to create a simple EIP2612SignatureTransferData object
+    const signatureTransferData = {
+      owner: kernelClient.account.address,
+      signature: '0x' // Empty signature for subsidized transfers
+    };
+
+    console.log("Calling subsidizedTransferToken with:", {
+      transferIntent,
+      signatureTransferData,
+      contractAddress: COMMERCE_CONTRACT_ADDRESS
+    });
+
+    // Encode the function data for the subsidizedTransferToken call
+    const data = encodeFunctionData({
+      abi: commerceContractAbi,
+      functionName: 'subsidizedTransferToken',
+      args: [transferIntent, signatureTransferData]
+    });
+
+    console.log("Encoded function data:", data);
+    console.log("Wallet address:", kernelClient.account.address);
+
+    // Call the contract with paymaster for gas sponsorship using sendTransaction
+    try {
+      const hash = await kernelClient.sendTransaction({
+        to: COMMERCE_CONTRACT_ADDRESS,
+        data: data,
+        value: BigInt(0),
+        paymaster: {
+          getPaymasterData: (userOperation: any) => {
+            console.log("Requesting paymaster sponsorship for operation:", userOperation);
+            return paymasterClient.sponsorUserOperation({
+              userOperation,
+            });
+          }
+        },
+      });
+
+      console.log("Commerce payment transaction hash:", hash);
+      return hash;
+    } catch (txError: any) {
+      console.error("Transaction execution failed:", txError);
+      
+      // Try to extract more detailed error information
+      if (txError.message) {
+        console.error("Error message:", txError.message);
+      }
+      
+      if (txError.details) {
+        console.error("Error details:", txError.details);
+      }
+      
+      if (txError.cause) {
+        console.error("Error cause:", txError.cause);
+      }
+      
+      // Extract error code if present
+      const errorCodeMatch = txError.message?.match(/0x[a-f0-9]{8}/i);
+      if (errorCodeMatch) {
+        const errorCode = errorCodeMatch[0];
+        const errorDescription = decodeErrorCode(errorCode);
+        console.error(`Error code ${errorCode}: ${errorDescription}`);
+        
+        if (errorCode === "0x8baa579f") {
+          console.error("This error typically means the payment ID has already been processed or is invalid.");
+          console.error("Check if this payment has already been completed or if the ID is correct.");
+        } else if (errorCode === "0x2b5b6d5c") {
+          console.error("The deadline for this payment has expired.");
+          console.error("Current time:", new Date().toISOString());
+          console.error("Payment deadline:", transferIntentData.callData.deadline);
+        }
+      } else {
+        console.error("No specific error code found in the error message.");
+      }
+      
+      throw txError;
+    }
+  } catch (error) {
+    console.error("Error executing Commerce payment:", error);
+    throw error;
+  }
+}
+
 // Main Application Component
 function MainApp() {
   const { authenticated, user, logout, login } = usePrivy();
@@ -232,11 +425,14 @@ function MainApp() {
   const [usdcBalance, setUsdcBalance] = useState<bigint | null>(null);
   const [ethBalance, setEthBalance] = useState<bigint | null>(null);
   const [checkingBalance, setCheckingBalance] = useState(false);
+  const [commercePaymentLoading, setCommercePaymentLoading] = useState(false);
+  const [commercePaymentHash, setCommercePaymentHash] = useState<string | null>(null);
+  const [commercePaymentData, setCommercePaymentData] = useState<any>(null);
 
   // Target address for sending funds
   const TARGET_ADDRESS = "0x8D33614Cbc97B59F8408aD67E520549F57F80055";
   // Amount for USDC (0.01 USDC = 10000 units with 6 decimals)
-  const AMOUNT_USDC = BigInt(990000); // 0.01 USDC
+  const AMOUNT_USDC = BigInt(10000); // 0.01 USDC
 
   // Function to load the existing wallet and session key from storage
   useEffect(() => {
@@ -693,6 +889,77 @@ function MainApp() {
     }
   }
 
+  // Function to execute a Coinbase Commerce payment
+  async function handleCommercePayment() {
+    if (!sessionClient) {
+      toast.error("No session client available. Please create a wallet first.");
+      return;
+    }
+
+    if (!usdcBalance || usdcBalance < BigInt(10000)) { // Minimum 0.01 USDC
+      toast.error("Insufficient USDC balance. Please fund your wallet first.");
+      return;
+    }
+
+    setCommercePaymentLoading(true);
+    try {
+      // Use our hardcoded payment details from the top of the file
+      const commerceData = {
+        callData: PAYMENT_DETAILS.transferIntent.callData,
+        metadata: PAYMENT_DETAILS.transferIntent.metadata
+      };
+      
+      // Update refundDestination to current wallet address if available
+      if (walletInfo?.address) {
+        commerceData.callData.refundDestination = walletInfo.address;
+      }
+
+      console.log("Payment data prepared:", commerceData);
+      
+      // Create a fresh paymaster client
+      const paymasterClient = createZeroDevPaymasterClient({
+        chain: base,
+        transport: http(BASE_CONFIG.zerodev_paymaster_url),
+      });
+      
+      // Execute the payment using our payment details - no fallbacks
+      const hash = await executeCommercePayment(
+        sessionClient,
+        commerceData,
+        paymasterClient
+      );
+      
+      setCommercePaymentHash(hash);
+      toast.success("Coinbase Commerce payment successful!");
+      
+      // Update balances after payment
+      setTimeout(() => checkBalances(), 5000);
+    } catch (error: any) {
+      console.error("Error executing Coinbase Commerce payment:", error);
+      
+      // Extract error code if present for better error messages
+      const errorCodeMatch = error.message?.match(/0x[a-f0-9]{8}/i);
+      if (errorCodeMatch) {
+        const errorCode = errorCodeMatch[0];
+        const errorDescription = decodeErrorCode(errorCode);
+        toast.error(`Payment failed: ${errorDescription}`);
+        
+        if (errorCode === "0x8baa579f") {
+          console.error("This error typically means the payment ID has already been processed or is invalid.");
+          console.error("Check if this payment has already been completed or if the ID is correct.");
+        } else if (errorCode === "0x2b5b6d5c") {
+          console.error("The deadline for this payment has expired.");
+          console.error("Current time:", new Date().toISOString());
+          console.error("Payment deadline:", PAYMENT_DETAILS.transferIntent.callData.deadline);
+        }
+      } else {
+        toast.error("Payment failed. Check console for details.");
+      }
+    } finally {
+      setCommercePaymentLoading(false);
+    }
+  }
+
   // Handle logout
   const handleLogout = async () => {
     try {
@@ -779,6 +1046,16 @@ function MainApp() {
                   color="green"
                 >
                   {transferLoading ? "Sending..." : "Send 0.01 USDC"}
+                </Button>
+              )}
+              
+              {sessionClient && (
+                <Button 
+                  onClick={handleCommercePayment}
+                  disabled={commercePaymentLoading || !sessionClient || !usdcBalance || usdcBalance < BigInt(10000)}
+                  color="blue"
+                >
+                  {commercePaymentLoading ? "Processing Payment..." : "Pay 0.01 USDC via Coinbase Commerce"}
                 </Button>
               )}
               
@@ -882,6 +1159,25 @@ function MainApp() {
                       </a>
                     </div>
                   )}
+                </InfoCard>
+              )}
+              
+              {/* Commerce Payment Information */}
+              {sessionClient && commercePaymentHash && (
+                <InfoCard title="Commerce Payment" color="indigo">
+                  <div className="mt-4 p-3 border rounded-lg bg-green-50">
+                    <h3 className="text-lg font-semibold mb-2">Commerce Payment Sent!</h3>
+                    <p className="mb-2">Transaction Hash:</p>
+                    <p className="font-mono text-xs bg-white p-2 rounded overflow-x-auto">{commercePaymentHash}</p>
+                    <a 
+                      href={`https://basescan.org/tx/${commercePaymentHash}`} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline mt-3 inline-block"
+                    >
+                      View on BaseScan
+                    </a>
+                  </div>
                 </InfoCard>
               )}
               
